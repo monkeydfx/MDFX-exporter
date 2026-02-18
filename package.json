@@ -34,7 +34,7 @@
     "win": {
       "target": "nsis",
       "icon": "src/assets/icons/icon.ico",
-      "artifactName": "TFX-Sync-${version}.${ext}"
+      "artifactName": "TFX-Sync.exe"
     },
     "mac": {
       "target": "dmg",
