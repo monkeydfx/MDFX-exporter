@@ -1,0 +1,49 @@
+name: Build Executables
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install
+      - run: npm run build:win
+      - uses: actions/upload-artifact@v3
+        with:
+          name: windows-build
+          path: dist/MDFX-Exporter-1.0.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v3
+      - uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install
+      - run: npm run build:mac
+      - uses: actions/upload-artifact@v3
+        with:
+          name: macos-build
+          path: dist/MDFX-Exporter-1.0.dmg
+
+  create-release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v3
+      - uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            windows-build/MDFX-Exporter-1.0.exe
+            macos-build/MDFX-Exporter-1.0.dmg
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

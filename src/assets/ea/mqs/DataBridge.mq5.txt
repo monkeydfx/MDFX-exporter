@@ -1,0 +1,3183 @@
+//+------------------------------------------------------------------+
+//|                                              MT5-Exporter-EA.mq5 |
+//+------------------------------------------------------------------+
+#property copyright "MDFX"
+#property version   "3.11"
+#property strict
+
+#include <Trade/Trade.mqh>
+
+//+------------------------------------------------------------------+
+// VARIABLES GLOBALES
+//+------------------------------------------------------------------+
+string EndpointURL = "";
+string APIKey = "";
+string UserEmail = "";
+string g_terminalID = "";  // 🆕 Terminal ID global
+int SendInterval = 600;  // 🔧 OPTIMIZADO: 10 minutos para reducir requests (plan FREE Cloudflare)
+                          // Los trades se sincronizan INSTANTÁNEAMENTE al cerrar, este es solo backup
+
+datetime g_lastSendTime = 0;
+datetime g_lastProcessedTime = 0;
+datetime g_lastCashflowTime = 0;  // 🆕 Timestamp del último ajuste de balance procesado
+long g_lastCashflowTicket = 0;  // 🆕 Último ticket de cashflow procesado
+bool g_isAccountConfirmed = false;
+datetime g_lastConfirmationCheck = 0;
+int g_lastOrderCount = 0;  // 🆕 Rastrear cambios en el histórico
+bool g_accountDataSent = false;  // 🆕 Flag para enviar datos de cuenta UNA SOLA VEZ si no está confirmada
+bool g_firstTradesSyncPending = false;  // 🆕 Flag para sincronizar histórico completo la PRIMERA VEZ
+datetime g_lastClosedDealTime = 0;  // 🆕 Timestamp del último deal cerrado procesado
+bool g_ConfigAccountMismatch = false;  // 🆕 Detectar APIKey válida pero de otra cuenta
+
+//+------------------------------------------------------------------+
+// 🆕 GESTIÓN AUTOMÁTICA DE SESIÓN (SET & FORGET)
+//+------------------------------------------------------------------+
+bool g_AutoManagementActive = false;
+bool g_SessionRestorePending = false;  // 🆕 Esperar confirmación del servidor al iniciar
+double g_SessionProfitTarget = 0;
+double g_SessionMaxLoss = 0;
+int g_SessionMaxTrades = 0;
+double g_SessionStartBalance = 0;
+int g_SessionTradesCount = 0;
+datetime g_SessionStartTime = 0;
+string g_SessionType = "";  // "morning", "afternoon", "night"
+
+bool g_TradingLocked = false;
+string g_LockReason = "";
+string g_LockDate = "";
+
+datetime g_LastConfigCheck = 0;
+bool g_DebugAutoMgmt = false;
+double g_DayStartBalance = 0;
+datetime g_DayStartTime = 0;
+string g_DayStartDate = "";
+string g_UserPlan = "free";  // 🆕 Plan del usuario para optimizar requests
+
+// Trading helper
+CTrade g_Trade;
+
+//+------------------------------------------------------------------+
+// 🆕 CONVERTIR STRING A MAYÚSCULAS (para MQL5)
+//+------------------------------------------------------------------+
+string StringToUpperMQL5(string str)
+{
+    string result = "";
+    for(int i = 0; i < StringLen(str); i++)
+    {
+        int ch = (int)StringGetCharacter(str, i);
+        if(ch >= 97 && ch <= 122)  // a-z
+        {
+            result += CharToString((uchar)(ch - 32));  // Convertir a mayúsculas
+        }
+        else
+        {
+            result += CharToString((uchar)ch);
+        }
+    }
+    return result;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 CREAR CONFIG MÍNIMO SI NO EXISTE
+// Útil para cambios de cuenta o si el archivo fue eliminado accidentalmente
+//+------------------------------------------------------------------+
+bool CreateMinimalConfig(string filename, string endpointUrl, string userEmail, bool forceOverwrite = false)
+{
+    // Verificar si el archivo YA EXISTE
+    int testHandle = FileOpen(filename, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(testHandle != INVALID_HANDLE)
+    {
+        FileClose(testHandle);
+        if(!forceOverwrite)
+        {
+            // Print("   (Archivo ya existe, no crear nuevo)");
+            return true;
+        }
+    }
+    
+    // Crear config mínimo
+    int handle = FileOpen(filename, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle == INVALID_HANDLE)
+    {
+        // Print("   ⚠️ No se pudo crear config mínimo");
+        return false;
+    }
+    
+    // Escribir contenido mínimo
+    string content = "EndpointURL=" + endpointUrl + "\r\n";
+    content += "UserEmail=" + userEmail + "\r\n";
+    content += "SendInterval=300\r\n";
+    content += "APIKey=\r\n";
+    
+    FileWriteString(handle, content);
+    FileClose(handle);
+    
+    // Print("   ✓ Config mínimo creado: ", filename);
+    return true;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 RENOMBRAR ARCHIVOS CUANDO SE DETECTA 401 (APIKEY REVOCADA)
+// Renombra los archivos ANTIGUOS (sin account) que tienen APIKey inválida
+// Parámetros: filenameOld = archivo antiguo sin account (a renombrar)
+//             stateFileOld = state antiguo sin account (a renombrar)
+//+------------------------------------------------------------------+
+void ArchiveInvalidConfigFiles(string filenameOld, string stateFileOld)
+{
+    // Print("🧹 ===== ARCHIVANDO ARCHIVOS ANTIGUOS CON APIKEY INVÁLIDA (401) =====");
+    
+    // Renombrar config antiguo (sin account) → config_OLD
+    int configHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(configHandle != INVALID_HANDLE)
+    {
+        FileClose(configHandle);
+        
+        string configOldName = filenameOld + "_OLD";
+        // Print("📝 Renombrando config ANTIGUO (usando FileMove):");
+        // Print("   FROM: ", filenameOld);
+        // Print("   TO:   ", configOldName);
+        
+        if(FileMove(filenameOld, FILE_COMMON, configOldName, FILE_COMMON))
+        {
+            // Print("   ✓ Config renombrado exitosamente");
+        }
+        else
+        {
+            int moveError = GetLastError();
+            // Print("   ❌ Error al renombrar (code: ", moveError, ")");
+        }
+    }
+    else
+    {
+        // Print("📝 Config ANTIGUO NO existe - nada que renombrar");
+    }
+    
+    // Renombrar state antiguo (sin account) → state_OLD
+    int stateHandle = FileOpen(stateFileOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(stateHandle != INVALID_HANDLE)
+    {
+        FileClose(stateHandle);
+        
+        string stateOldName = stateFileOld + "_OLD";
+        // Print("📝 Renombrando state ANTIGUO (usando FileMove):");
+        // Print("   FROM: ", stateFileOld);
+        // Print("   TO:   ", stateOldName);
+        
+        if(FileMove(stateFileOld, FILE_COMMON, stateOldName, FILE_COMMON))
+        {
+            // Print("   ✓ State renombrado exitosamente");
+        }
+        else
+        {
+            int moveError = GetLastError();
+            // Print("   ❌ Error al renombrar (code: ", moveError, ")");
+        }
+    }
+    else
+    {
+        // Print("📝 State ANTIGUO NO existe - nada que renombrar");
+    }
+    
+    // Print("✅ ARCHIVADO completado");
+}
+
+//+------------------------------------------------------------------+
+// 🆕 VERIFICAR SI LA INSTALACIÓN EXISTE EN BD
+// Valida el APIKey contra el servidor
+// Si retorna false con código 401, archiva los archivos ANTIGUOS automáticamente
+//+------------------------------------------------------------------+
+bool IsInstallationValidInBD(string configFilename, string endpointURL, 
+                             string filenameOldToArchive = "", string stateFileOldToArchive = "")
+{
+    g_ConfigAccountMismatch = false;
+    // Leer APIKey del archivo
+    int fileHandle = FileOpen(configFilename, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        int fileErr = GetLastError();
+        // Print("   ⚠️ No se pudo abrir archivo: ", configFilename, " (Error: ", fileErr, ")");
+        return false;
+    }
+    
+    string apiKey = "";
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        if(StringFind(line, "APIKey=") == 0)
+        {
+            apiKey = StringSubstr(line, 7);  // "APIKey=".length = 7
+            StringTrimRight(apiKey);
+            break;
+        }
+    }
+    FileClose(fileHandle);
+    
+    // Si no hay APIKey, la instalación no es válida
+    if(StringLen(apiKey) == 0)
+    {
+        // Print("   ⚠️ APIKey vacío - instalación no válida");
+        return false;
+    }
+    
+    // 🌐 VALIDAR CONTRA EL SERVIDOR
+    if(StringLen(endpointURL) == 0)
+    {
+        // Print("   ⚠️ EndpointURL vacío - no se puede validar");
+        return false;
+    }
+    
+    char emptyData[];
+    char result[];
+    string resultHeaders = "";
+    
+    string headers = "X-API-Key: " + apiKey + "\r\n";
+    int timeout = 3000;
+    string validateUrl = endpointURL + "/api/validate-installation";
+    
+    // Print("   📋 APIKey leído: ", StringSubstr(apiKey, 0, 20), "...");
+    // Print("   🔄 WebRequest GET a: ", validateUrl);
+    
+    int res = WebRequest(
+        "GET",
+        validateUrl,
+        headers,
+        timeout,
+        emptyData,
+        result,
+        resultHeaders
+    );
+    
+    // Print("   📡 Respuesta HTTP: ", res);
+    
+    if(res == 200)
+    {
+        // Print("   ✅ APIKey VÁLIDA en servidor");
+        string resultStr = CharArrayToString(result);
+        int accPos = StringFind(resultStr, "\"account\":");
+        if(accPos >= 0)
+        {
+            int startPos = accPos + 10;
+            while(startPos < StringLen(resultStr) && StringGetCharacter(resultStr, startPos) == ' ')
+                startPos++;
+            int endPos = startPos;
+            while(endPos < StringLen(resultStr))
+            {
+                int ch = StringGetCharacter(resultStr, endPos);
+                if(ch == ',' || ch == '}') break;
+                endPos++;
+            }
+            string accVal = StringSubstr(resultStr, startPos, endPos - startPos);
+            StringTrimLeft(accVal);
+            StringTrimRight(accVal);
+            if(accVal != "null" && StringLen(accVal) > 0)
+            {
+                if(StringGetCharacter(accVal, 0) == '"' && StringLen(accVal) >= 2)
+                    accVal = StringSubstr(accVal, 1, StringLen(accVal) - 2);
+                string currentAcc = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+                if(accVal != currentAcc)
+                {
+                    g_ConfigAccountMismatch = true;
+                    // Print("⚠️ APIKey pertenece a otra cuenta: ", accVal, " (actual: ", currentAcc, ")");
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    else if(res == 401 || res == 403)
+    {
+        // Print("   ❌ APIKey REVOCADA (", res, ") - ARCHIVANDO ARCHIVOS ANTIGUOS");
+        
+        // 🧹 AUTOMÁTICAMENTE RENOMBRAR ARCHIVOS ANTIGUOS (sin account)
+        if(StringLen(filenameOldToArchive) > 0 && StringLen(stateFileOldToArchive) > 0)
+        {
+            ArchiveInvalidConfigFiles(filenameOldToArchive, stateFileOldToArchive);
+        }
+        else
+        {
+            // Print("   ⚠️ (Sin archivos antiguos para archivar)");
+        }
+        
+        return false;
+    }
+    else if(res == -1)
+    {
+        // Print("   ⚠️ Error de conexión (WebRequest retornó -1) - asumiendo válido");
+        return true;
+    }
+    else
+    {
+        // Print("   ⚠️ Error inesperado: ", res, " - manteniendo archivo");
+        return true;
+    }
+}
+
+//+------------------------------------------------------------------+
+bool LoadConfigFromFile()
+{
+    // 🆕 Obtener Terminal ID de la ruta del terminal
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    }
+    else
+    {
+        terminalID = StringToUpperMQL5(terminalPath);
+    }
+    
+    // 🆕 MULTI-ACCOUNT: Buscar en este orden:
+    // 1. DataBridge_MT5_[ID]_[ACCOUNT]_config.ini (si existe y es válido en BD)
+    // 2. DataBridge_MT5_[ID]_config.ini (compatibilidad - renombrar con account)
+    // 3. Si ninguno existe → crear mínimo
+    
+    string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
+    string filenameWithAccount = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_config.ini";
+    string filenameOld = "DataBridge_MT5_" + terminalID + "_config.ini";
+    string stateFileWithAccount = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_state.txt";
+    string stateFileOld = "DataBridge_MT5_" + terminalID + "_state.txt";
+    string filenameUsed = "";
+    bool forceReadConfig = false;
+    
+    // Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
+    // Print("   1. ", filenameWithAccount);
+    // Print("   2. ", filenameOld);
+    // Print("   (archivos .old serán ignorados automáticamente)");
+    
+    // ========== PRIMERO: Leer config ANTIGUO (sin account) para obtener EndpointURL y UserEmail ==========
+    // Esto es crítico: si el config nuevo no existe pero sí el antiguo,
+    // debemos copiar sus valores al crear el nuevo
+    string readEndpointURL = "";
+    string readUserEmail = "";
+    
+    int oldFileHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(oldFileHandle != INVALID_HANDLE)
+    {
+        // Print("   📂 Leyendo config ANTIGUO para obtener EndpointURL y UserEmail...");
+        while(!FileIsEnding(oldFileHandle))
+        {
+            string line = FileReadString(oldFileHandle);
+            if(StringFind(line, "EndpointURL=") == 0)
+            {
+                readEndpointURL = StringSubstr(line, 12);
+                StringTrimRight(readEndpointURL);
+                // Print("      ✓ EndpointURL leído del antiguo: ", readEndpointURL);
+            }
+            else if(StringFind(line, "UserEmail=") == 0)
+            {
+                readUserEmail = StringSubstr(line, 10);
+                StringTrimRight(readUserEmail);
+                // Print("      ✓ UserEmail leído del antiguo: ", readUserEmail);
+            }
+        }
+        FileClose(oldFileHandle);
+    }
+    else
+    {
+        // Print("   ⚠️ No existe config antiguo - usará valores vacíos");
+    }
+    
+    // ========== PASO 1: BUSCAR ARCHIVO CON ACCOUNT NUMBER ==========
+    int fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    
+    if(fileHandle != INVALID_HANDLE)
+    {
+        FileClose(fileHandle);
+        
+        // ⚠️ CRÍTICO: Verificar si esta instalación EXISTE en BD
+        // Print("   ⚠️ Archivo con account encontrado - VERIFICANDO en BD...");
+        
+        // 🔧 PRIMERO: Leer EndpointURL del archivo para poder validar
+        string tempEndpoint = "";
+        int tempHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+        if(tempHandle != INVALID_HANDLE)
+        {
+            while(!FileIsEnding(tempHandle))
+            {
+                string line = FileReadString(tempHandle);
+                if(StringFind(line, "EndpointURL=") == 0)
+                {
+                    tempEndpoint = StringSubstr(line, 12);  // "EndpointURL=".length = 12
+                    StringTrimRight(tempEndpoint);
+                    break;
+                }
+            }
+            FileClose(tempHandle);
+        }
+        
+        if(IsInstallationValidInBD(filenameWithAccount, tempEndpoint, filenameOld, stateFileOld))
+        {
+            // ✓ Existe en BD - usar este archivo
+            fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+            filenameUsed = filenameWithAccount;
+            // Print("   ✓ ENCONTRADO: #1 (específico de cuenta) - VÁLIDO en BD");
+        }
+        else
+        {
+            if(g_ConfigAccountMismatch)
+            {
+                // APIKey válido pero de otra cuenta → regenerar config limpio
+                if(CreateMinimalConfig(filenameWithAccount, readEndpointURL, readUserEmail, true))
+                {
+                    fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                    filenameUsed = filenameWithAccount;
+                    // Print("   ✓ Config nuevo creado por mismatch de cuenta - LISTO");
+                }
+                else
+                {
+                    return false;
+                }
+                g_ConfigAccountMismatch = false;
+                forceReadConfig = true;
+            }
+            if(!forceReadConfig)
+            {
+                // ❌ Archivo con account es INVÁLIDO - ARCHIVOS ANTIGUOS HAN SIDO ARCHIVADOS
+                // Print("   🧹 Archivo con account inválido - archivos antiguos archivados a .old");
+                // Print("   📁 Config antiguo archivado: ", filenameOld, "_OLD");
+                // Print("   📁 State antiguo archivado: ", stateFileOld, "_OLD");
+                
+                // Print("   🔄 Buscando archivo sin account: ", filenameOld);
+                
+                // Intentar con archivo viejo (sin account)
+                fileHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                if(fileHandle != INVALID_HANDLE)
+                {
+                    FileClose(fileHandle);
+                    
+                    // Leer EndpointURL del archivo viejo para validar
+                    tempEndpoint = "";
+                    int tempHandle2 = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                    if(tempHandle2 != INVALID_HANDLE)
+                    {
+                        while(!FileIsEnding(tempHandle2))
+                        {
+                            string line = FileReadString(tempHandle2);
+                            if(StringFind(line, "EndpointURL=") == 0)
+                            {
+                                tempEndpoint = StringSubstr(line, 12);
+                                StringTrimRight(tempEndpoint);
+                                break;
+                            }
+                        }
+                        FileClose(tempHandle2);
+                    }
+                    
+                    // El archivo sin account es VÁLIDO si está vacío de APIKey (se va a rellenar)
+                    // O si tiene APIKey válida. Solo borrarlo si tiene APIKey INVÁLIDO (401)
+                    if(IsInstallationValidInBD(filenameOld, tempEndpoint))
+                    {
+                        fileHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                        filenameUsed = filenameOld;
+                        // Print("   ✓ ENCONTRADO: #2 (sin account) - VÁLIDO");
+                    }
+                    else
+                    {
+                        // Tampoco el viejo es válido - se ha archivado, crear nuevo
+                        // Print("   🧹 Archivo sin account también INVÁLIDO - ha sido archivado a .old");
+                        // Print("   📁 Config archivado: ", filenameOld, "_OLD");
+                        // Print("   📁 State archivado: ", stateFileOld, "_OLD");
+                        // Print("   ⚠️ CREANDO config NUEVO...");
+                        
+                        // Usar EndpointURL y UserEmail leídos del config antiguo
+                        if(CreateMinimalConfig(filenameWithAccount, readEndpointURL, readUserEmail))
+                        {
+                            fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                            filenameUsed = filenameWithAccount;
+                            // Print("   ✓ Config nuevo creado - LISTO para reinstalar desde la app");
+                        }
+                        else
+                        {
+                            // Print("   ❌ FALLO CRÍTICO: No se pudo crear config");
+                            return false;
+                        }
+                    }
+                }
+                else
+                {
+                    // Ni con account ni sin account - crear nuevo
+                    // Print("   ❌ Tampoco existe archivo sin account");
+                    // Print("   ⚠️ CREANDO config NUEVO y LIMPIO...");
+                    
+                    // Usar EndpointURL y UserEmail leídos del config antiguo (aunque estén vacíos)
+                    if(CreateMinimalConfig(filenameWithAccount, readEndpointURL, readUserEmail))
+                    {
+                        fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                        filenameUsed = filenameWithAccount;
+                        // Print("   ✓ Config nuevo creado - LISTO para reinstalar desde la app");
+                    }
+                    else
+                    {
+                        // Print("   ❌ FALLO CRÍTICO: No se pudo crear config");
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    else
+    {
+        // ========== PASO 2: NO existe con account - buscar sin account ==========
+        // ⚠️ IGNORAR archivos con sufijo _OLD (archivos archivados)
+        // Print("   📂 PASO 2: No existe archivo con account");
+        // Print("   🔍 Buscando archivo sin account: ", filenameOld);
+        
+        fileHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+        
+        // Verificar si el archivo encontrado es un .old (archivado)
+        bool isOldFile = false;
+        if(fileHandle != INVALID_HANDLE)
+        {
+            FileClose(fileHandle);
+            if(StringFind(filenameOld, "_OLD") != -1)
+            {
+                isOldFile = true;
+                // Print("   ⚠️ Archivo encontrado pero es .OLD (archivado) - IGNORANDO");
+                fileHandle = INVALID_HANDLE;  // Simular que no existe
+            }
+        }
+        
+        if(fileHandle != INVALID_HANDLE)
+        {
+            FileClose(fileHandle);
+            
+            // Leer EndpointURL del archivo viejo
+            string tempEndpoint = "";
+            int tempHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+            if(tempHandle != INVALID_HANDLE)
+            {
+                while(!FileIsEnding(tempHandle))
+                {
+                    string line = FileReadString(tempHandle);
+                    if(StringFind(line, "EndpointURL=") == 0)
+                    {
+                        tempEndpoint = StringSubstr(line, 12);
+                        StringTrimRight(tempEndpoint);
+                        break;
+                    }
+                }
+                FileClose(tempHandle);
+            }
+            
+            if(IsInstallationValidInBD(filenameOld, tempEndpoint))
+            {
+                // ✓ Existe en BD - usar
+                fileHandle = FileOpen(filenameOld, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                filenameUsed = filenameOld;
+                // Print("   ✓ ENCONTRADO: #2 (compatibilidad) - VÁLIDO en BD");
+                // Print("   📝 Este archivo será renombrado a account-specific al guardar");
+            }
+            else
+            {
+                // ❌ No es válido - se ha archivado, crear nuevo limpio
+                // Print("   🧹 Archivo sin account INVÁLIDO - ha sido archivado a .old");
+                // Print("   📁 Config archivado: ", filenameOld, "_OLD");
+                // Print("   📁 State archivado: ", stateFileOld, "_OLD");
+                // Print("   ⚠️ CREANDO config NUEVO y LIMPIO...");
+                
+                // Usar EndpointURL y UserEmail leídos del config antiguo
+                if(CreateMinimalConfig(filenameWithAccount, readEndpointURL, readUserEmail))
+                {
+                    fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                    filenameUsed = filenameWithAccount;
+                    // Print("   ✓ Config nuevo y limpio creado - LISTO para reinstalar desde la app");
+                }
+                else
+                {
+                    // Print("   ❌ FALLO CRÍTICO: No se pudo crear config");
+                    return false;
+                }
+            }
+        }
+        else
+        {
+            // ========== PASO 3: Ninguno existe - crear nuevo ==========
+            // Print("   ✗ NO ENCONTRADO ninguno");
+            // Print("   ⚠️ CREANDO nuevo config desde cero...");
+            
+            // Usar EndpointURL y UserEmail leídos del config antiguo (aunque estén vacíos)
+            if(CreateMinimalConfig(filenameWithAccount, readEndpointURL, readUserEmail))
+            {
+                fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+                filenameUsed = filenameWithAccount;
+                // Print("   ✅ Config nuevo creado EXITOSAMENTE");
+                // Print("   📍 Archivo: ", filenameWithAccount);
+            }
+            else
+            {
+                // Print("   ❌ FALLO CRÍTICO: No se pudo crear config");
+                // Print("   📍 Se intentó crear: ", filenameWithAccount);
+                return false;
+            }
+        }
+    }
+    
+    // Leer contenido
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        
+        if(StringLen(line) == 0) continue;
+        if(StringGetCharacter(line, 0) == '#' || StringGetCharacter(line, 0) == ';') 
+            continue;
+        
+        int pos = StringFind(line, "=");
+        if(pos == -1) continue;
+        
+        string key = StringSubstr(line, 0, pos);
+        string value = StringSubstr(line, pos + 1);
+        
+        StringTrimLeft(key);
+        StringTrimRight(key);
+        StringTrimLeft(value);
+        StringTrimRight(value);
+        
+        if(key == "EndpointURL") 
+        {
+            if(StringLen(value) > 0) EndpointURL = value;
+            // Print("  ✓ EndpointURL: ", value);
+        }
+        else if(key == "APIKey") 
+        {
+            APIKey = value;
+           /* if(StringLen(value) > 0)
+                // Print("  ✓ APIKey: ", StringSubstr(value, 0, 20), "...");
+            else
+                // Print("  ⚠️ APIKey: (vacío)");*/
+        }
+        else if(key == "UserEmail") 
+        {
+            if(StringLen(value) > 0) UserEmail = value;
+            // Print("  ✓ UserEmail: ", value);
+        }
+        else if(key == "SendInterval") 
+        {
+            int interval = (int)StringToInteger(value);
+            if(interval > 0) SendInterval = interval;
+            // Print("  ✓ SendInterval: ", SendInterval);
+        }
+    }
+    
+    FileClose(fileHandle);
+    
+    // 🆕 VALIDAR que tenemos valores críticos
+    if(StringLen(EndpointURL) == 0)
+    {
+        // Print("   ❌ CRÍTICO: EndpointURL está vacío");
+        return false;
+    }
+    
+    // UserEmail puede estar vacío, usaremos AccountName como fallback
+    if(StringLen(UserEmail) == 0)
+    {
+        UserEmail = AccountInfoString(ACCOUNT_NAME);
+        // Print("   ⚠️ UserEmail vacío, usando AccountName: ", UserEmail);
+    }
+    
+    // Print("✅ CONFIG CARGADO EXITOSAMENTE desde: ", filenameUsed);
+    return true;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 GENERAR APIKEY LOCALMENTE EN EL EA
+//+------------------------------------------------------------------+
+string GenerateAPIKey(string email, string installationId)
+{
+    // Hash basado en email + installationId para garantizar unicidad
+    // Formato: monkeydfx-{hash}
+    
+    // Combinar email + installationId para hash único
+    string rawData = email + installationId;
+    
+    // Generar 16 caracteres de hash basados en los datos
+    string hash = "";
+    int seed = 0;
+    
+    for(int i = 0; i < StringLen(rawData); i++) {
+        seed += StringGetCharacter(rawData, i);
+    }
+    
+    seed = (seed * 16807) % 2147483647;
+    
+    string chars = "0123456789abcdef";
+    for(int i = 0; i < 16; i++) {
+        int index = (seed >> ((i % 8) * 4)) & 0x0F;
+        hash += StringSubstr(chars, index, 1);
+    }
+    
+    return "monkeydfx-" + hash;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 GUARDAR APIKEY EN CONFIG.INI (simplificado como MT4)
+// NOTA: InstallationID se calcula DINÁMICAMENTE en cada inicio
+// basado en TerminalID + AccountNumber, NO se guarda en el archivo
+//+------------------------------------------------------------------+
+void SaveAPIKeyToConfig(string apiKey)
+{
+    // Obtener Terminal ID y número de cuenta para multi-account
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    }
+    else
+    {
+        terminalID = StringToUpperMQL5(terminalPath);
+    }
+    
+    string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
+    string newFilename = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_config.ini";
+    string oldFilename = "DataBridge_MT5_" + terminalID + "_config.ini";
+    
+    // Leer contenido actual si existe
+    int fileHandle = FileOpen(newFilename, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    bool usingOldFile = false;
+    
+    if(fileHandle == INVALID_HANDLE)
+    {
+        // Si no existe nuevo, leer del antiguo
+        fileHandle = FileOpen(oldFilename, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+        usingOldFile = true;
+        
+        if(fileHandle == INVALID_HANDLE)
+        {
+            // Print("⚠️ Config no existe - creando nuevo con APIKey");
+            fileHandle = FileOpen(newFilename, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+            if(fileHandle == INVALID_HANDLE)
+            {
+                // Print("❌ No se pudo crear config");
+                return;
+            }
+            
+            FileWriteString(fileHandle, "APIKey=" + apiKey + "\r\n");
+            FileClose(fileHandle);
+            // Print("✅ Config nuevo creado con APIKey");
+            return;
+        }
+    }
+    
+    // Leer contenido actual (mantener todas las líneas)
+    string content = "";
+    bool foundAPIKey = false;
+    
+    while(!FileIsEnding(fileHandle))
+    {
+        string line = FileReadString(fileHandle);
+        
+        if(StringFind(line, "APIKey=") == 0)
+        {
+            content += "APIKey=" + apiKey + "\r\n";
+            foundAPIKey = true;
+        }
+        else if(StringLen(line) > 0)
+        {
+            content += line + "\r\n";
+        }
+    }
+    
+    FileClose(fileHandle);
+    
+    // Si no encontró APIKey, agregarlo
+    if(!foundAPIKey)
+    {
+        content += "APIKey=" + apiKey + "\r\n";
+    }
+    
+    // Escribir al archivo nuevo (con account number)
+    fileHandle = FileOpen(newFilename, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(fileHandle == INVALID_HANDLE)
+    {
+        // Print("❌ No se pudo escribir en nuevo config: ", newFilename);
+        return;
+    }
+    
+    FileWriteString(fileHandle, content);
+    FileClose(fileHandle);
+    // Print("💾 APIKey guardado en: ", newFilename);
+    
+    // Si usábamos archivo antiguo, eliminarlo para evitar confusiones
+    if(usingOldFile)
+    {
+        // Print("🗑️  Limpiando archivo antiguo (sin account number): ", oldFilename);
+        FileDelete(oldFilename);
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 WEBREQUEST CON RETRY AUTOMÁTICO
+// Maneja errores de conexión de forma inteligente
+//+------------------------------------------------------------------+
+int WebRequestWithRetry(
+    string method,
+    string url,
+    string headers,
+    int timeout,
+    char &sendData[],
+    char &receiveData[],
+    string &receiveHeaders,
+    int maxRetries = 3
+)
+{
+    int lastError = -1;
+    int waitTime = 1000;  // Empezar con 1 segundo
+    
+    for(int attempt = 0; attempt < maxRetries; attempt++)
+    {
+        // Print("📡 WebRequest INTENTO ", (attempt + 1), "/", maxRetries);
+        // Print("   URL: ", url);
+        
+        int result = WebRequest(method, url, headers, timeout, sendData, receiveData, receiveHeaders);
+        
+        // ✅ Si funcionó, retornar
+        if(result >= 200 && result < 300)
+        {
+            // Print("   ✅ Respuesta ", result);
+            return result;
+        }
+        
+        // ❌ Si falló, analizar el error
+        lastError = result;
+        // Print("   ❌ Error ", result);
+        
+        // No reintentar si es error 4xx (excepto 408, 429)
+        if(result >= 400 && result < 500)
+        {
+            if(result != 408 && result != 429)
+            {
+                // Print("   (No reintentar - error 4xx)");
+                return result;
+            }
+        }
+        
+        // Si es el último intento, no esperar
+        if(attempt < maxRetries - 1)
+        {
+            // Print("   ⏳ Esperando ", (waitTime / 1000), " segundos antes de reintentar...");
+            Sleep(waitTime);
+            waitTime *= 2;  // Exponential backoff
+        }
+    }
+    
+    // Print("   ⛔ FALLO PERMANENTE después de ", maxRetries, " intentos. Último error: ", lastError);
+    return lastError;
+}
+void RegisterInstallation()
+{
+    // 🆕 Obtener Terminal ID de la ruta
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    }
+    else
+    {
+        terminalID = StringToUpperMQL5(terminalPath);
+    }
+    
+    // 🔧 EXTRAER BROKER del SERVER igual que hace la app (parte antes del "-")
+    // Si server = "FTMO-Demo2" → broker = "FTMO"
+    // Si server = "XM-Real" → broker = "XM"
+    string server = AccountInfoString(ACCOUNT_SERVER);
+    string broker = server;
+    int dashPos = StringFind(server, "-");
+    if(dashPos > 0)
+    {
+        broker = StringSubstr(server, 0, dashPos);
+    }
+    
+    // Generar ID único de instalación usando broker extraído del server
+    // Esto debe coincidir exactamente con lo que la app pre-reservó
+    // 🔧 TODO EN MAYÚSCULAS para garantizar coincidencia exacta en BD
+    // Importante: StringToUpperMQL5() devuelve string, no modifica in-place como en MQL4
+    broker = StringToUpperMQL5(broker);
+    server = StringToUpperMQL5(server);
+    terminalID = StringToUpperMQL5(terminalID);
+    
+    // 🆕 NUEVO FORMATO: ID_MT5_{terminalId}
+    // El account se agrega al registrar: ID_MT5_{terminalId}_{accountNumber}
+    string baseInstallationId = "ID_MT5_" + terminalID;
+    string accountNumber = IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN));
+    
+    // Obtener info de la máquina (OS, etc)
+    string machineInfo = "{\"os\":\"Windows\",\"platform\":\"MT5\",\"build\":" + IntegerToString(TerminalInfoInteger(TERMINAL_BUILD)) + "}";
+    
+    // Usar UserEmail del config.ini, fallback a AccountName si no existe
+    string email = UserEmail;
+    if(StringLen(email) == 0)
+    {
+        email = AccountInfoString(ACCOUNT_NAME);
+    }
+    
+    // 🆕 CAMBIO: Llamar a /api/activate-installation en lugar de /api/register-installation
+    // Este endpoint busca instalación RESERVED y la activa con el account number
+    
+    // Crear JSON para activar instalación
+    string json = "{"
+        "\"base_installation_id\":\"" + baseInstallationId + "\","
+        "\"account_number\":\"" + accountNumber + "\","
+        "\"user_id\":\"" + email + "\","  // Usar email como user_id, NOT APIKey (which may be empty)
+        "\"broker\":\"" + broker + "\","
+        "\"server\":\"" + server + "\","
+        "\"machine_info\":" + machineInfo +
+    "}";
+    
+    char data[];
+    char result[];
+    string resultHeaders = "";
+    
+    StringToCharArray(json, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1);
+    
+    string headers = "Content-Type: application/json\r\n";
+    // ❌ NO ENVIAR APIKEY SI ESTÁ VACÍO - El servidor lo generará y lo retornará
+    if(StringLen(APIKey) > 0)
+    {
+        headers += "X-API-Key: " + APIKey + "\r\n";
+    }
+    
+    int timeout = 5000;
+    string fullUrl = EndpointURL + "/api/activate-installation";
+    
+    // 🆕 USAR WEBREQUEST CON RETRY
+    int res = WebRequestWithRetry(
+        "POST",
+        fullUrl,
+        headers,
+        timeout,
+        data,
+        result,
+        resultHeaders,
+        3  // maxRetries
+    );
+    
+    if(res == 200 || res == 201)
+    {
+        // Print("✅ INSTALACIÓN ACTIVADA EXITOSAMENTE");
+        
+        // 🆕 Parsear respuesta para obtener apiKey y confirmed status
+        string resultStr = CharArrayToString(result);
+        // Print("Respuesta JSON: ", resultStr);
+        
+        // 🆕 EXTRAER APIKEY DE LA RESPUESTA
+        int apiKeyPos = StringFind(resultStr, "\"api_key\":\"");
+        if(apiKeyPos > 0)
+        {
+            int startPos = apiKeyPos + 11; // "api_key":"
+            int endPos = StringFind(resultStr, "\"", startPos);
+            if(endPos > startPos)
+            {
+                string newApiKey = StringSubstr(resultStr, startPos, endPos - startPos);
+                if(StringLen(newApiKey) > 10)
+                {
+                    APIKey = newApiKey;
+                    SaveAPIKeyToConfig(APIKey);
+                    // Print("✅ APIKey ACTUALIZADO del servidor: ", StringSubstr(APIKey, 0, 20) + "...");
+                }
+            }
+        }
+        
+        // 🆕 EXTRAER USER_PLAN DE LA RESPUESTA
+        int planPos = StringFind(resultStr, "\"user_plan\":\"");
+        if(planPos > 0)
+        {
+            int planStart = planPos + 13; // "user_plan":"
+            int planEnd = StringFind(resultStr, "\"", planStart);
+            if(planEnd > planStart)
+            {
+                g_UserPlan = StringSubstr(resultStr, planStart, planEnd - planStart);
+                // Print("📋 Plan usuario: ", g_UserPlan);
+            }
+        }
+        
+        // Buscar "confirmed":0 o "confirmed":1 en la respuesta
+        int confirmedPos = StringFind(resultStr, "\"confirmed\":");
+        if(confirmedPos > 0)
+        {
+            string confirmedPart = StringSubstr(resultStr, confirmedPos + 12, 1);
+            if(confirmedPart == "1")
+            {
+                Print("✅ Instalación YA confirmada - puede sincronizar trades");
+                g_isAccountConfirmed = true;
+            }
+            else
+            {
+                Print("⏳ Instalación PENDIENTE DE CONFIRMACIÓN - espere confirmación desde el journal");
+                g_isAccountConfirmed = false;
+            }
+        }
+        else
+        {
+            // Print("⏳ No se encontró estado de confirmación - asumiendo pendiente");
+            g_isAccountConfirmed = false;
+        }
+    }
+    else if(res == 404)
+    {
+        // Print("🛑 ERROR 404 - INSTALACIÓN NO ENCONTRADA");
+        // Print("   Esto significa que esta terminal NO fue reservada en la app Electron");
+        // Print("   📝 SOLUCIÓN: Abre la app Electron e instala el EA en esta terminal primero");
+        // Print("   Detalles enviados:");
+        // Print("   - Email: ", email);
+        // Print("   - Terminal ID: ", terminalID);
+        // Print("   - Account: ", accountNumber);
+        return;
+    }
+    else if(res == 403)
+    {
+         // Print("🛑 ERROR 403 - TERMINAL RESERVADA POR OTRO USUARIO");
+        // Print("   Esta terminal fue reservada con un email diferente");
+        // Print("   📝 SOLUCIÓN: Usa la app Electron con el email correcto");
+        // Print("   Email actual: ", email);
+        return;
+    }
+    else if(res == 400)
+    {
+         // Print("🛑 ERROR 400 - SOLICITUD INVÁLIDA");
+        // Print("   Faltan campos requeridos o datos mal formados");
+        // Print("   📝 DATOS ENVIADOS:");
+        // Print("   - base_installation_id: ", baseInstallationId);
+        // Print("   - account_number: ", accountNumber);
+        // Print("   - user_id (email): ", email);
+        // Print("   - broker: ", broker);
+        // Print("   - server: ", server);
+        return;
+    }
+    else if(res == -1)
+    {
+        // Print("❌ ERROR DE CONEXIÓN");
+        // Print("   No se pudo conectar al servidor después de 3 intentos");
+        // Print("   📝 VERIFICAR: ¿Tienes internet? ¿WebRequest habilitado en MT5?");
+        // Print("   URL: ", fullUrl);
+        return;
+    }
+    else
+    {
+        // Print("⚠️ ERROR INESPERADO: ", res);
+        // Print("   Respuesta raw: ", CharArrayToString(result));
+        return;
+    }
+}
+
+//+------------------------------------------------------------------+
+// Verificar si la cuenta está confirmada
+//+------------------------------------------------------------------+
+bool CheckAccountConfirmation()
+{
+    // 🔧 FIX: Enviar petición activa al servidor para obtener estado actualizado
+    // Esto soluciona el problema de sincronización cuando MT está abierto
+    // y el usuario confirma desde el journal web
+    
+    // Enviar datos de cuenta ligeros para obtener estado de confirmación
+    SendAccountData();
+    
+    return g_isAccountConfirmed;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 OBTENER TIMESTAMP DEL DEAL CERRADO MÁS RECIENTE
+// Busca en el histórico el trade CERRADO más reciente
+// Eficiente porque solo actualiza cuando hay un nuevo cierre
+//+------------------------------------------------------------------+
+datetime GetNewestClosedDealTime()
+{
+    datetime from = g_lastClosedDealTime > 0 ? g_lastClosedDealTime : (TimeCurrent() - 86400 * 365);
+    datetime to = TimeCurrent();
+    
+    if(!HistorySelect(from, to))
+        return g_lastClosedDealTime;
+    
+    int totalDeals = HistoryDealsTotal();
+    datetime newestTime = g_lastClosedDealTime;
+
+    for(int i = 0; i < totalDeals; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket <= 0) continue;
+
+        ulong posId = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+        if(posId == 0) continue;
+
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL)
+            continue;
+
+        long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+        bool isExitDeal = (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY || dealEntry == DEAL_ENTRY_INOUT);
+        if(!isExitDeal)
+            continue;
+
+        datetime closeTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+        if(closeTime > newestTime && closeTime <= TimeCurrent())
+        {
+            newestTime = closeTime;
+        }
+    }
+
+    return newestTime;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 OBTENER MARCADOR DEL AJUSTE DE BALANCE MÁS RECIENTE (tiempo + ticket)
+//+------------------------------------------------------------------+
+void GetNewestCashflowMarker(datetime &newestTime, long &newestTicket)
+{
+    datetime from = g_lastCashflowTime > 0 ? g_lastCashflowTime : (TimeCurrent() - 86400 * 365);
+    datetime to = TimeCurrent();
+
+    newestTime = g_lastCashflowTime;
+    newestTicket = g_lastCashflowTicket;
+
+    if(!HistorySelect(from, to))
+        return;
+
+    int totalDeals = HistoryDealsTotal();
+
+    for(int i = 0; i < totalDeals; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket <= 0) continue;
+
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        if(dealType != DEAL_TYPE_BALANCE && dealType != DEAL_TYPE_CREDIT)
+            continue;
+
+        datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+        long ticketLong = (long)ticket;
+
+        if(dealTime > newestTime || (dealTime == newestTime && ticketLong > newestTicket))
+        {
+            newestTime = dealTime;
+            newestTicket = ticketLong;
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 ENVIAR AJUSTES DE BALANCE (DEPÓSITOS / RETIROS)
+//+------------------------------------------------------------------+
+void SendCashflows()
+{
+    datetime from = g_lastCashflowTime;
+    datetime to = TimeCurrent();
+
+    if(from == 0)
+    {
+        from = TimeCurrent() - (86400 * 365);
+    }
+
+    if(!HistorySelect(from, to))
+        return;
+
+    int total = HistoryDealsTotal();
+    string flowsJson = "[";
+    int sent = 0;
+    datetime newestTime = g_lastCashflowTime;
+    long newestTicket = g_lastCashflowTicket;
+
+    ulong processedTickets[];
+    ArrayResize(processedTickets, 0);
+
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket <= 0) continue;
+
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        if(dealType != DEAL_TYPE_BALANCE && dealType != DEAL_TYPE_CREDIT)
+            continue;
+
+        datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+        long ticketLong = (long)ticket;
+
+        if(dealTime < g_lastCashflowTime)
+            continue;
+        if(dealTime == g_lastCashflowTime && ticketLong <= g_lastCashflowTicket)
+            continue;
+
+        bool alreadyProcessed = false;
+        for(int j = 0; j < ArraySize(processedTickets); j++)
+        {
+            if(processedTickets[j] == ticket)
+            {
+                alreadyProcessed = true;
+                break;
+            }
+        }
+        if(alreadyProcessed) continue;
+
+        int newSize = ArraySize(processedTickets) + 1;
+        ArrayResize(processedTickets, newSize);
+        processedTickets[newSize - 1] = ticket;
+
+        double amount = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+        if(amount == 0) continue;
+
+        string dateStr = TimeToString(dealTime, TIME_DATE);
+        string notes = HistoryDealGetString(ticket, DEAL_COMMENT);
+        if(notes == "" || notes == "null" || notes == "NULL") notes = "";
+
+        string type = (amount >= 0) ? "deposit" : "withdraw";
+        double absAmount = MathAbs(amount);
+
+        if(dealTime > newestTime || (dealTime == newestTime && ticketLong > newestTicket))
+        {
+            newestTime = dealTime;
+            newestTicket = ticketLong;
+        }
+
+        if(sent > 0) flowsJson += ",";
+
+        flowsJson += "{";
+        flowsJson += "\"id\":\"" + IntegerToString(ticket) + "\",";
+        flowsJson += "\"type\":\"" + type + "\",";
+        flowsJson += "\"amount\":" + DoubleToString(absAmount, 2) + ",";
+        flowsJson += "\"date\":\"" + dateStr + "\",";
+        if(StringLen(notes) > 0)
+        {
+            StringReplace(notes, "\"", "\\\"");
+            flowsJson += "\"notes\":\"" + notes + "\"";
+        }
+        else
+        {
+            flowsJson += "\"notes\":null";
+        }
+        flowsJson += "}";
+
+        sent++;
+    }
+
+    flowsJson += "]";
+
+    if(sent == 0)
+        return;
+
+    string json = "{";
+    json += "\"type\":\"cashflows\",";
+    json += "\"timestamp\":" + IntegerToString(TimeCurrent()) + ",";
+    json += "\"account\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
+    json += "\"totalDeals\":" + IntegerToString(sent) + ",";
+    json += "\"data\":" + flowsJson;
+    json += "}";
+
+    bool cashflowSendOk = SendToEndpoint(json, "/api/mt-sync");
+
+    if(cashflowSendOk && (newestTime > g_lastCashflowTime || (newestTime == g_lastCashflowTime && newestTicket > g_lastCashflowTicket)))
+    {
+        g_lastCashflowTime = newestTime;
+        g_lastCashflowTicket = newestTicket;
+        SaveState();
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🔧 AUTO-CONFIRMAR INSTALACIÓN (llamada por el EA después de registrarse)
+//+------------------------------------------------------------------+
+void AutoConfirmInstallation(string email)
+{
+    char data[];
+    char result[];
+    string resultHeaders = "";
+    
+    // JSON sin autenticación (el Worker valida por email)
+    string json = "{"
+        "\"email\":\"" + email + "\","
+        "\"autoConfirm\":true"
+    "}";
+    
+    StringToCharArray(json, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1);
+    
+    string headers = "Content-Type: application/json\r\n";
+    
+    int timeout = 5000;
+    string fullUrl = EndpointURL + "/api/auto-confirm-installation";
+    
+    int res = WebRequest(
+        "POST",
+        fullUrl,
+        headers,
+        timeout,
+        data,
+        result,
+        resultHeaders
+    );
+    
+    if(res == 200 || res == 201)
+    {
+        g_isAccountConfirmed = true;
+    }
+    else if(res == -1)
+    {
+        int error = GetLastError();
+        if(error == 4060)
+        {
+            // Print("⚠️ Error 4060");
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 LIMPIAR ARCHIVOS OBSOLETOS SI INSTALACIÓN NO EXISTE
+// LÓGICA SIMPLIFICADA: Si APIKey está vacío, la instalación no es válida
+//+------------------------------------------------------------------+
+void CleanupObsoleteInstallationFiles()
+{
+    // Print("🔄 ===== INICIANDO CLEANUP DE ARCHIVOS OBSOLETOS =====");
+    
+    // Obtener Terminal ID y número de cuenta
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    }
+    else
+    {
+        terminalID = StringToUpperMQL5(terminalPath);
+    }
+    
+    string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
+    string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_config.ini";
+    string stateFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_state.txt";
+    
+    // Print("📝 Terminal ID: ", terminalID);
+    // Print("👤 Account: ", accountNum);
+    // Print("📄 Config file: ", configFile);
+    
+    // Leer APIKey del config actual
+    int configHandle = FileOpen(configFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    string apiKey = "";
+    
+    if(configHandle != INVALID_HANDLE)
+    {
+        // Print("✓ Config file encontrado - leyendo APIKey...");
+        
+        while(!FileIsEnding(configHandle))
+        {
+            string line = FileReadString(configHandle);
+            if(StringFind(line, "APIKey=") == 0)
+            {
+                apiKey = StringSubstr(line, 7);
+                StringTrimRight(apiKey);
+                break;
+            }
+        }
+        FileClose(configHandle);
+    }
+    else
+    {
+        // Print("✗ Config file NO encontrado - nada que limpiar");
+        return;
+    }
+    
+    // Si APIKey está vacío, la instalación no es válida
+    // Renombrar archivos a .old para que se recree desde cero
+    if(StringLen(apiKey) == 0)
+    {
+        // Print("⚠️ CLEANUP: APIKey vacío - renombrando archivos a .old");
+        
+        // Renombrar config
+        if(!FileMove(configFile, FILE_COMMON, configFile + ".old", FILE_COMMON))
+        {
+            int moveErr = GetLastError();
+            // Print("   ⚠️ No se pudo renombrar config: ", configFile, " (Error: ", moveErr, ")");
+        }
+        else
+        {
+            // Print("   ✅ RENOMBRADO: ", configFile + ".old");
+        }
+        
+        // Renombrar state
+        if(!FileMove(stateFile, FILE_COMMON, stateFile + ".old", FILE_COMMON))
+        {
+            int moveErr2 = GetLastError();
+            // Print("   ⚠️ No se pudo renombrar state: ", stateFile, " (Error: ", moveErr2, ")");
+        }
+        else
+        {
+            // Print("   ✅ RENOMBRADO: ", stateFile + ".old");
+        }
+    }
+    else
+    {
+        // Print("✓ APIKey válida - NO hay limpieza pendiente");
+    }
+    
+    // Print("✅ CLEANUP completado");
+}
+
+//+------------------------------------------------------------------+
+// 🆕 CONSTRUIR INSTALLATION ID (MT5)
+//+------------------------------------------------------------------+
+string BuildInstallationId()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    else
+        terminalID = StringToUpperMQL5(terminalPath);
+    
+    return "ID_MT5_" + terminalID + "_" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+}
+
+//+------------------------------------------------------------------+
+// 🆕 GUARDAR / CARGAR CONFIG DE SESIÓN
+//+------------------------------------------------------------------+
+void SaveSessionConfig()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+    
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
+    
+    int handle = FileOpen(configFile, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        FileWriteString(handle, "active=" + IntegerToString(g_AutoManagementActive ? 1 : 0) + "\r\n");
+        FileWriteString(handle, "profit_target=" + DoubleToString(g_SessionProfitTarget, 2) + "\r\n");
+        FileWriteString(handle, "max_loss=" + DoubleToString(g_SessionMaxLoss, 2) + "\r\n");
+        FileWriteString(handle, "max_trades=" + IntegerToString(g_SessionMaxTrades) + "\r\n");
+        FileWriteString(handle, "start_balance=" + DoubleToString(g_SessionStartBalance, 2) + "\r\n");
+        FileWriteString(handle, "trades_count=" + IntegerToString(g_SessionTradesCount) + "\r\n");
+        FileWriteString(handle, "session_type=" + g_SessionType + "\r\n");
+        FileWriteString(handle, "start_time=" + IntegerToString(g_SessionStartTime) + "\r\n");
+        FileClose(handle);
+        
+        // Print("💾 Configuración de sesión guardada localmente");
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 GUARDAR / CARGAR BASELINE DIARIO
+//+------------------------------------------------------------------+
+void SaveDayBaseline()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string dayFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_day.txt";
+
+    int handle = FileOpen(dayFile, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        FileWriteString(handle, g_DayStartDate + "\r\n");
+        FileWriteString(handle, DoubleToString(g_DayStartBalance, 2) + "\r\n");
+        FileClose(handle);
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 GUARDAR / CARGAR BLOQUEO DIARIO
+//+------------------------------------------------------------------+
+void SaveLockState()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string lockFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_lock.txt";
+
+    if(!g_TradingLocked)
+    {
+        FileDelete(lockFile);
+        return;
+    }
+
+    int handle = FileOpen(lockFile, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        FileWriteString(handle, g_LockDate + "\r\n");
+        FileWriteString(handle, g_LockReason + "\r\n");
+        FileClose(handle);
+    }
+}
+
+void LoadLockState()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string lockFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_lock.txt";
+
+    int handle = FileOpen(lockFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle == INVALID_HANDLE)
+        return;
+
+    string dateLine = FileReadString(handle);
+    string reasonLine = "";
+    if(!FileIsEnding(handle))
+        reasonLine = FileReadString(handle);
+    FileClose(handle);
+
+    StringTrimLeft(dateLine);
+    StringTrimRight(dateLine);
+    StringTrimLeft(reasonLine);
+    StringTrimRight(reasonLine);
+
+    if(StringLen(dateLine) > 0)
+    {
+        g_LockDate = dateLine;
+        g_LockReason = reasonLine;
+        g_TradingLocked = true;
+    }
+}
+
+void EnsureLockState()
+{
+    if(!g_TradingLocked)
+        return;
+
+    string today = TimeToString(TimeCurrent(), TIME_DATE);
+    if(g_LockDate != today)
+    {
+        g_TradingLocked = false;
+        g_LockReason = "";
+        g_LockDate = "";
+        SaveLockState();
+    }
+}
+
+void LoadDayBaseline()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string dayFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_day.txt";
+
+    int handle = FileOpen(dayFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle == INVALID_HANDLE)
+        return;
+
+    string dateLine = FileReadString(handle);
+    string balLine = "";
+    if(!FileIsEnding(handle))
+        balLine = FileReadString(handle);
+    FileClose(handle);
+
+    StringTrimLeft(dateLine);
+    StringTrimRight(dateLine);
+    StringTrimLeft(balLine);
+    StringTrimRight(balLine);
+
+    if(StringLen(dateLine) > 0)
+    {
+        g_DayStartDate = dateLine;
+        g_DayStartTime = (datetime)StringToTime(dateLine);
+    }
+    if(StringLen(balLine) > 0)
+        g_DayStartBalance = StringToDouble(balLine);
+}
+
+void EnsureDayBaseline()
+{
+    string today = TimeToString(TimeCurrent(), TIME_DATE);
+    if(g_DayStartDate == today && g_DayStartTime <= 0)
+        g_DayStartTime = GetDayStartTime();
+    if(g_DayStartDate != today || g_DayStartBalance <= 0)
+    {
+        g_DayStartDate = today;
+        g_DayStartTime = GetDayStartTime();
+        g_DayStartBalance = CalculateDayStartBalance();
+        if(g_DayStartBalance <= 0) g_DayStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        if(g_DayStartBalance <= 0) g_DayStartBalance = AccountInfoDouble(ACCOUNT_EQUITY);
+        SaveDayBaseline();
+
+        if(g_AutoManagementActive)
+        {
+            g_SessionStartTime = g_DayStartTime;
+            g_SessionStartBalance = g_DayStartBalance;
+            g_SessionTradesCount = CalculateSessionTradesCount();
+            SaveSessionConfig();
+        }
+    }
+}
+
+void LoadSessionConfig()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+    
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
+    
+    int handle = FileOpen(configFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle == INVALID_HANDLE)
+        return;
+    
+    bool fileHadActiveSession = false;
+    
+    while(!FileIsEnding(handle))
+    {
+        string line = FileReadString(handle);
+        
+        if(StringFind(line, "active=") == 0)
+            fileHadActiveSession = (StringToInteger(StringSubstr(line, 7)) == 1);
+        else if(StringFind(line, "profit_target=") == 0)
+            g_SessionProfitTarget = StringToDouble(StringSubstr(line, 14));
+        else if(StringFind(line, "max_loss=") == 0)
+            g_SessionMaxLoss = StringToDouble(StringSubstr(line, 9));
+        else if(StringFind(line, "max_trades=") == 0)
+            g_SessionMaxTrades = (int)StringToInteger(StringSubstr(line, 11));
+        else if(StringFind(line, "start_balance=") == 0)
+            g_SessionStartBalance = StringToDouble(StringSubstr(line, 14));
+        else if(StringFind(line, "trades_count=") == 0)
+            g_SessionTradesCount = (int)StringToInteger(StringSubstr(line, 13));
+        else if(StringFind(line, "session_type=") == 0)
+            g_SessionType = StringSubstr(line, 13);
+        else if(StringFind(line, "start_time=") == 0)
+            g_SessionStartTime = (datetime)StringToInteger(StringSubstr(line, 11));
+    }
+    FileClose(handle);
+    
+    // 🔧 ARQUITECTURA:
+    // - Archivo local = indica que estaba activa
+    // - Servidor = fuente de verdad para re-activar o desactivar
+    // - Al reiniciar MT, dejamos la sesión PENDIENTE hasta confirmación
+    
+    if(fileHadActiveSession)
+    {
+        // No activar hasta confirmación del servidor
+        g_AutoManagementActive = false;
+        g_SessionRestorePending = true;
+
+        // Limpiar cualquier bloqueo previo
+        g_TradingLocked = false;
+        g_LockReason = "";
+    }
+}
+
+void DeleteSessionConfig()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    else
+        terminalID = terminalPath;
+    
+    string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
+    string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
+    FileDelete(configFile);
+}
+
+//+------------------------------------------------------------------+
+// 🆕 HELPERS DE DÍA ACTUAL (P&L Y TRADES)
+//+------------------------------------------------------------------+
+datetime GetDayStartTime()
+{
+    string dateStr = TimeToString(TimeCurrent(), TIME_DATE);
+    return (datetime)StringToTime(dateStr);
+}
+
+double GetTodayClosedProfit(datetime dayStart)
+{
+    double total = 0;
+    if(!HistorySelect(dayStart, TimeCurrent()))
+        return 0;
+    int totalDeals = HistoryDealsTotal();
+    for(int i = 0; i < totalDeals; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket == 0) continue;
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL)
+            continue;
+        long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+        bool isExitDeal = (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY || dealEntry == DEAL_ENTRY_INOUT);
+        if(!isExitDeal) continue;
+        datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+        if(dealTime < dayStart || dealTime > TimeCurrent())
+            continue;
+        double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+        double swap = HistoryDealGetDouble(ticket, DEAL_SWAP);
+        double commission = HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+        total += (profit + swap + commission);
+    }
+    return total;
+}
+
+double GetTodayCashflows(datetime dayStart)
+{
+    double total = 0;
+    if(!HistorySelect(dayStart, TimeCurrent()))
+        return 0;
+    int totalDeals = HistoryDealsTotal();
+    for(int i = 0; i < totalDeals; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket == 0) continue;
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        if(dealType != DEAL_TYPE_BALANCE && dealType != DEAL_TYPE_CREDIT)
+            continue;
+        datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+        if(dealTime < dayStart || dealTime > TimeCurrent())
+            continue;
+        double amount = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+        total += amount;
+    }
+    return total;
+}
+
+double CalculateDayStartBalance()
+{
+    datetime dayStart = GetDayStartTime();
+    double closedProfit = GetTodayClosedProfit(dayStart);
+    double cashflows = GetTodayCashflows(dayStart);
+    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+    if(balance <= 0)
+        balance = AccountInfoDouble(ACCOUNT_EQUITY);
+    double baseline = balance - closedProfit - cashflows;
+    if(baseline <= 0)
+        baseline = balance;
+    if(baseline <= 0)
+        baseline = AccountInfoDouble(ACCOUNT_EQUITY);
+    return baseline;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 CONTAR TRADES DE LA SESIÓN (abiertos + cerrados)
+//+------------------------------------------------------------------+
+int CalculateSessionTradesCount()
+{
+    int count = 0;
+    datetime from = g_SessionStartTime;
+    datetime to = TimeCurrent();
+    
+    // 🆕 Rastrear posiciones CERRADAS (solo contar una vez)
+    ulong closedPositions[];
+    ArrayResize(closedPositions, 0);
+    
+    if(HistorySelect(from, to))
+    {
+        int total = HistoryDealsTotal();
+        for(int i = 0; i < total; i++)
+        {
+            ulong ticket = HistoryDealGetTicket(i);
+            if(ticket == 0) continue;
+            
+            long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+            if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL)
+                continue;
+            
+            long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+            bool isExitDeal = (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY || dealEntry == DEAL_ENTRY_INOUT);
+            if(!isExitDeal) continue;
+            
+            datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+            if(dealTime >= g_SessionStartTime)
+            {
+                // Rastrear posición cerrada
+                ulong posId = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+                ArrayResize(closedPositions, ArraySize(closedPositions) + 1);
+                closedPositions[ArraySize(closedPositions) - 1] = posId;
+                count++;
+            }
+        }
+    }
+    
+    int posTotal = PositionsTotal();
+    for(int j = 0; j < posTotal; j++)
+    {
+        ulong posTicket = PositionGetTicket(j);
+        if(posTicket == 0) continue;
+        
+        long posType = PositionGetInteger(POSITION_TYPE);
+        if(posType != POSITION_TYPE_BUY && posType != POSITION_TYPE_SELL)
+            continue;
+        
+        datetime posTime = (datetime)PositionGetInteger(POSITION_TIME);
+        if(posTime >= g_SessionStartTime)
+        {
+            // 🔒 Asegurar que esta posición NO fue cerrada (edge case)
+            bool alreadyClosed = false;
+            for(int k = 0; k < ArraySize(closedPositions); k++)
+            {
+                if(closedPositions[k] == posTicket)
+                {
+                    alreadyClosed = true;
+                    break;
+                }
+            }
+            
+            if(!alreadyClosed)
+                count++;
+        }
+    }
+    
+    return count;
+}
+
+//+------------------------------------------------------------------+
+// 🆕 ENFORZAR BLOQUEO (cierra trades si intenta operar)
+//+------------------------------------------------------------------+
+void EnforceTradingLock()
+{
+    static datetime lastCloseAttempt = 0;
+    if(TimeCurrent() - lastCloseAttempt < 1) return;
+    lastCloseAttempt = TimeCurrent();
+    
+    if(PositionsTotal() > 0)
+    {
+        // Print("[AUTO-MGMT] EnforceTradingLock: positions=", PositionsTotal());
+        string reason = g_LockReason;
+        if(StringLen(reason) == 0) reason = "Trading bloqueado";
+        CloseAllTrades(reason);
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 CHECK CONFIG (RÁPIDO PARA ACTIVACIÓN/DESACTIVACIÓN)
+//+------------------------------------------------------------------+
+void CheckSessionConfig()
+{
+    if(StringLen(EndpointURL) == 0 || StringLen(APIKey) == 0)
+        return;
+    
+    // 🆕 OPTIMIZACIÓN: Usuarios FREE no usan auto-management, skip polling
+    if((g_UserPlan == "free" || g_UserPlan == "FREE") && !g_AutoManagementActive && !g_SessionRestorePending)
+    {
+        return;  // No hacer requests innecesarios
+    }
+    
+    // 🆕 CAMBIO CRÍTICO: OnTimer ya maneja el timing (5s si activa, 10s si inactiva)
+    // Así que NO duplicar la validación de timing aquí
+    
+    char emptyData[];
+    char result[];
+    string resultHeaders = "";
+    
+    string headers = "X-API-Key: " + APIKey + "\r\n";
+    int timeout = 3000;
+    
+    string installationId = BuildInstallationId();
+    string url = EndpointURL + "/api/check-session-config?installation_id=" + installationId;
+    
+    int res = WebRequest("GET", url, headers, timeout, emptyData, result, resultHeaders);
+    if(res == 200)
+    {
+        string response = CharArrayToString(result);
+        if(StringFind(response, "\"action\":\"ACTIVATE_SESSION\"") != -1)
+        {
+            ParseAndActivateSession(response);
+        }
+        else if(StringFind(response, "\"action\":\"DEACTIVATE_SESSION\"") != -1)
+        {
+            // Solo procesar si la sesión estaba activa (evita notificaciones repetidas)
+            if(g_AutoManagementActive || g_SessionRestorePending)
+            {
+                DeactivateSession();
+            }
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// 🆕 ACTIVAR SESIÓN CON CONFIG
+//+------------------------------------------------------------------+
+void ParseAndActivateSession(string json)
+{
+    // Print("========================================");
+    // Print("ACTIVANDO GESTION AUTOMATICA");
+    // Print("========================================");
+    
+    g_SessionProfitTarget = 0;
+    g_SessionMaxLoss = 0;
+    g_SessionMaxTrades = 0;
+    g_SessionType = "";
+    
+    int profitPos = StringFind(json, "\"profit_target\":");
+    if(profitPos >= 0)
+    {
+        int startPos = profitPos + 16;
+        int endPos = StringFind(json, ",", startPos);
+        if(endPos < 0) endPos = StringFind(json, "}", startPos);
+        string profitStr = StringSubstr(json, startPos, endPos - startPos);
+        g_SessionProfitTarget = StringToDouble(profitStr);
+    }
+    
+    int lossPos = StringFind(json, "\"max_daily_loss\":");
+    if(lossPos >= 0)
+    {
+        int startPos = lossPos + 17;
+        int endPos = StringFind(json, ",", startPos);
+        if(endPos < 0) endPos = StringFind(json, "}", startPos);
+        string lossStr = StringSubstr(json, startPos, endPos - startPos);
+        g_SessionMaxLoss = StringToDouble(lossStr);
+    }
+    
+    int tradesPos = StringFind(json, "\"max_trades\":");
+    if(tradesPos >= 0)
+    {
+        int startPos = tradesPos + 13;
+        int endPos = StringFind(json, ",", startPos);
+        if(endPos < 0) endPos = StringFind(json, "}", startPos);
+        string tradesStr = StringSubstr(json, startPos, endPos - startPos);
+        g_SessionMaxTrades = (int)StringToInteger(tradesStr);
+    }
+    
+    int sessionPos = StringFind(json, "\"session\":\"");
+    if(sessionPos >= 0)
+    {
+        int startPos = sessionPos + 11;
+        int endPos = StringFind(json, "\"", startPos);
+        g_SessionType = StringSubstr(json, startPos, endPos - startPos);
+    }
+    
+    g_AutoManagementActive = true;
+    g_SessionRestorePending = false;
+    EnsureDayBaseline();  // Asegura que g_DayStartTime y g_DayStartBalance estén inicializados
+    // Sesión cuenta desde medianoche del día actual
+    g_SessionStartTime = g_DayStartTime;
+    g_SessionStartBalance = g_DayStartBalance;
+    if(g_SessionStartBalance <= 0) g_SessionStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+    if(g_SessionStartBalance <= 0) g_SessionStartBalance = AccountInfoDouble(ACCOUNT_EQUITY);
+    g_SessionTradesCount = CalculateSessionTradesCount();  // Todos los trades de hoy
+    g_TradingLocked = false;
+    g_LockReason = "";
+    string alertMsg = "Gestion automatica ACTIVADA. Objetivo=$" + DoubleToString(g_SessionProfitTarget, 2) +
+        " MaxLoss=$" + DoubleToString(g_SessionMaxLoss, 2) +
+        " MaxTrades=" + IntegerToString(g_SessionMaxTrades) +
+        " Sesion=" + g_SessionType;
+    NotifyAlert(alertMsg);
+    
+    // Print("CONFIGURACION RECIBIDA:");
+    // Print("   Objetivo: $", g_SessionProfitTarget);
+    // Print("   Perdida Maxima: $", g_SessionMaxLoss);
+    // Print("   Trades Maximos: ", g_SessionMaxTrades);
+    // Print("   Sesion: ", g_SessionType);
+    // Print("   Balance Inicial: $", g_SessionStartBalance);
+    // Print("========================================");
+    
+    // Print("[AUTO-MGMT] Gestion automatica activada. Objetivo=$", g_SessionProfitTarget,
+    //     " MaxLoss=$", g_SessionMaxLoss,
+    //     " MaxTrades=", g_SessionMaxTrades);
+    
+    SaveSessionConfig();
+    
+    // Actualizar panel a estado ACTIVO
+    double sessionPnL = AccountInfoDouble(ACCOUNT_EQUITY) - g_SessionStartBalance;
+    UpdateActivePanel(g_SessionStartBalance, sessionPnL, g_SessionProfitTarget,
+                      g_SessionMaxLoss, g_SessionTradesCount, g_SessionMaxTrades, g_SessionType);
+}
+
+//+------------------------------------------------------------------+
+// PANEL VISUAL TFX-GESTION (estilo SaaS profesional)
+//+------------------------------------------------------------------+
+#define PANEL_X         20
+#define PANEL_Y         50
+#define PANEL_WIDTH     280
+#define PANEL_HEIGHT    220
+#define PANEL_PREFIX    "TFX_"
+
+color clrPanelBg       = C'30,30,35';
+color clrPanelBorder   = C'60,60,70';
+color clrHeaderBg      = C'45,45,55';
+color clrTextWhite     = C'255,255,255';
+color clrTextGray      = C'180,180,180';
+color clrProfit        = C'34,197,94';
+color clrLoss          = C'239,68,68';
+color clrWarning       = C'251,191,36';
+color clrBadgeOn       = C'34,197,94';
+color clrBadgeOff      = C'239,68,68';
+
+void CreatePanelObject(string name, ENUM_OBJECT type, int x, int y, int width, int height, 
+                       color bgColor, color borderColor = clrNONE, int corner = CORNER_LEFT_UPPER)
+{
+    string objName = PANEL_PREFIX + name;
+    ObjectDelete(0, objName);
+    if(type == OBJ_RECTANGLE_LABEL)
+    {
+        ObjectCreate(0, objName, OBJ_RECTANGLE_LABEL, 0, 0, 0);
+        ObjectSetInteger(0, objName, OBJPROP_XDISTANCE, x);
+        ObjectSetInteger(0, objName, OBJPROP_YDISTANCE, y);
+        ObjectSetInteger(0, objName, OBJPROP_XSIZE, width);
+        ObjectSetInteger(0, objName, OBJPROP_YSIZE, height);
+        ObjectSetInteger(0, objName, OBJPROP_BGCOLOR, bgColor);
+        ObjectSetInteger(0, objName, OBJPROP_BORDER_TYPE, BORDER_FLAT);
+        ObjectSetInteger(0, objName, OBJPROP_BORDER_COLOR, borderColor != clrNONE ? borderColor : bgColor);
+        ObjectSetInteger(0, objName, OBJPROP_CORNER, corner);
+        ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+        ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+    }
+}
+
+void CreateLabel(string name, int x, int y, string text, color textColor, int fontSize = 9, 
+                 string font = "Segoe UI", int corner = CORNER_LEFT_UPPER)
+{
+    string objName = PANEL_PREFIX + name;
+    ObjectDelete(0, objName);
+    ObjectCreate(0, objName, OBJ_LABEL, 0, 0, 0);
+    ObjectSetInteger(0, objName, OBJPROP_XDISTANCE, x);
+    ObjectSetInteger(0, objName, OBJPROP_YDISTANCE, y);
+    ObjectSetInteger(0, objName, OBJPROP_CORNER, corner);
+    ObjectSetString(0, objName, OBJPROP_TEXT, text);
+    ObjectSetString(0, objName, OBJPROP_FONT, font);
+    ObjectSetInteger(0, objName, OBJPROP_FONTSIZE, fontSize);
+    ObjectSetInteger(0, objName, OBJPROP_COLOR, textColor);
+    ObjectSetInteger(0, objName, OBJPROP_BACK, false);
+    ObjectSetInteger(0, objName, OBJPROP_SELECTABLE, false);
+}
+
+void UpdateLabel(string name, string text, color textColor = clrNONE)
+{
+    string objName = PANEL_PREFIX + name;
+    ObjectSetString(0, objName, OBJPROP_TEXT, text);
+    if(textColor != clrNONE)
+        ObjectSetInteger(0, objName, OBJPROP_COLOR, textColor);
+}
+
+void DeleteAllPanelObjects()
+{
+    int total = ObjectsTotal(0);
+    for(int i = total - 1; i >= 0; i--)
+    {
+        string name = ObjectName(0, i);
+        if(StringFind(name, PANEL_PREFIX) == 0)
+            ObjectDelete(0, name);
+    }
+}
+
+void CreateBasePanel()
+{
+    CreatePanelObject("MainBg", OBJ_RECTANGLE_LABEL, PANEL_X, PANEL_Y, PANEL_WIDTH, PANEL_HEIGHT + 20, clrPanelBg, clrPanelBorder);
+    CreatePanelObject("HeaderBg", OBJ_RECTANGLE_LABEL, PANEL_X, PANEL_Y, PANEL_WIDTH, 32, clrHeaderBg, clrPanelBorder);
+    CreateLabel("Title", PANEL_X + 12, PANEL_Y + 8, "TFX-GESTION", clrTextWhite, 11, "Segoe UI Semibold");
+    
+    // Separadores
+    CreatePanelObject("Sep1", OBJ_RECTANGLE_LABEL, PANEL_X + 10, PANEL_Y + 105, PANEL_WIDTH - 20, 1, clrPanelBorder);
+    CreatePanelObject("Sep2", OBJ_RECTANGLE_LABEL, PANEL_X + 10, PANEL_Y + 175, PANEL_WIDTH - 20, 1, clrPanelBorder);
+    
+    // Labels izquierda
+    CreateLabel("LblEquity", PANEL_X + 15, PANEL_Y + 45, "Equity Inicial:", clrTextGray, 9);
+    CreateLabel("LblPnL", PANEL_X + 15, PANEL_Y + 65, "P&L Actual:", clrTextGray, 9);
+    CreateLabel("LblProgress", PANEL_X + 15, PANEL_Y + 85, "Progreso:", clrTextGray, 9);
+    CreateLabel("LblTarget", PANEL_X + 15, PANEL_Y + 115, "Objetivo:", clrTextGray, 9);
+    CreateLabel("LblMaxLoss", PANEL_X + 15, PANEL_Y + 135, "Max Loss:", clrTextGray, 9);
+    CreateLabel("LblTrades", PANEL_X + 15, PANEL_Y + 155, "Trades:", clrTextGray, 9);
+    CreateLabel("LblSession", PANEL_X + 15, PANEL_Y + 185, "Sesion:", clrTextGray, 9);
+    CreateLabel("LblStatus", PANEL_X + 15, PANEL_Y + 210, "Estado:", clrTextGray, 9);
+    
+    // Valores derecha (inicialmente inactivos)
+    CreateLabel("ValEquity", PANEL_X + 130, PANEL_Y + 45, "---", clrTextGray, 9, "Segoe UI Semibold");
+    CreateLabel("ValPnL", PANEL_X + 130, PANEL_Y + 65, "---", clrTextGray, 10, "Segoe UI Semibold");
+    CreateLabel("ValTarget", PANEL_X + 130, PANEL_Y + 115, "---", clrTextGray, 9);
+    CreateLabel("ValMaxLoss", PANEL_X + 130, PANEL_Y + 135, "---", clrTextGray, 9);
+    CreateLabel("ValTrades", PANEL_X + 130, PANEL_Y + 155, "0 / 0", clrTextGray, 9);
+    CreateLabel("ValSession", PANEL_X + 130, PANEL_Y + 185, "---", clrTextGray, 9);
+    CreateLabel("ValStatus", PANEL_X + 130, PANEL_Y + 210, "INACTIVO", clrWarning, 9, "Segoe UI Semibold");
+    
+    // Badge ON/OFF (inicialmente OFF)
+    CreatePanelObject("BadgeBg", OBJ_RECTANGLE_LABEL, PANEL_X + PANEL_WIDTH - 55, PANEL_Y + 6, 45, 20, clrBadgeOff);
+    CreateLabel("BadgeText", PANEL_X + PANEL_WIDTH - 45, PANEL_Y + 9, "OFF", clrTextWhite, 9, "Segoe UI Semibold");
+    
+    // Barra de progreso (en su propia línea, inicialmente vacía)
+    CreatePanelObject("ProgressBg", OBJ_RECTANGLE_LABEL, PANEL_X + 130, PANEL_Y + 88, 100, 8, C'50,50,60');
+    CreatePanelObject("ProgressBar", OBJ_RECTANGLE_LABEL, PANEL_X + 130, PANEL_Y + 88, 0, 8, clrPanelBg);
+    CreateLabel("ValProgressPct", PANEL_X + 235, PANEL_Y + 85, "0%", clrTextGray, 8);
+    
+    ChartRedraw(0);
+}
+
+void UpdateActivePanel(double equity, double pnl, double target, double maxLoss, int trades, int maxTrades, string session)
+{
+    UpdateLabel("ValEquity", "$" + DoubleToString(equity, 2));
+    string pnlText = (pnl >= 0) ? "+$" + DoubleToString(pnl, 2) : "-$" + DoubleToString(MathAbs(pnl), 2);
+    UpdateLabel("ValPnL", pnlText, (pnl >= 0) ? clrProfit : clrLoss);
+    UpdateLabel("ValTarget", "$" + DoubleToString(target, 2));
+    UpdateLabel("ValMaxLoss", "-$" + DoubleToString(maxLoss, 2));
+    UpdateLabel("ValTrades", IntegerToString(trades) + "/" + IntegerToString(maxTrades));
+    UpdateLabel("ValSession", session, clrWarning);
+    UpdateLabel("ValStatus", "ACTIVA", clrProfit);
+    ObjectSetInteger(0, PANEL_PREFIX + "BadgeBg", OBJPROP_BGCOLOR, clrBadgeOn);
+    UpdateLabel("BadgeText", "ON");
+    
+    // Barra de progreso y porcentaje
+    double pct = (target > 0) ? MathMin(100, MathMax(0, (pnl / target) * 100)) : 0;
+    int progressWidth = (int)(100 * pct / 100);  // Barra de 100px max
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_XSIZE, progressWidth);
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_BGCOLOR, (pnl >= 0) ? clrProfit : clrLoss);
+    UpdateLabel("ValProgressPct", IntegerToString((int)pct) + "%", (pnl >= 0) ? clrProfit : clrLoss);
+    
+    ChartRedraw(0);
+}
+
+void UpdateLockedPanel(string reason)
+{
+    UpdateLabel("ValPnL", "BLOQUEADO", clrLoss);
+    UpdateLabel("ValStatus", "BLOQUEADO", clrLoss);
+    ObjectSetInteger(0, PANEL_PREFIX + "BadgeBg", OBJPROP_BGCOLOR, clrBadgeOn);
+    UpdateLabel("BadgeText", "ON");
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_XSIZE, 100);  // Barra completa en rojo
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_BGCOLOR, clrLoss);
+    UpdateLabel("ValProgressPct", "100%", clrLoss);  // Porcentaje en rojo
+    ChartRedraw(0);
+}
+
+void UpdateInactivePanel()
+{
+    UpdateLabel("ValPnL", "---", clrTextGray);
+    UpdateLabel("ValStatus", "INACTIVO", clrWarning);
+    ObjectSetInteger(0, PANEL_PREFIX + "BadgeBg", OBJPROP_BGCOLOR, clrBadgeOff);
+    UpdateLabel("BadgeText", "OFF");
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_XSIZE, 0);  // Barra vacía
+    ObjectSetInteger(0, PANEL_PREFIX + "ProgressBar", OBJPROP_BGCOLOR, clrPanelBg);
+    UpdateLabel("ValProgressPct", "0%", clrTextGray);
+    UpdateLabel("ValTrades", "0 / 0", clrTextGray);
+    UpdateLabel("ValSession", "---", clrTextGray);
+    ChartRedraw(0);
+}
+
+void ShowActivePanel(double sessionPnL, double targetPct)
+{
+    UpdateActivePanel(g_SessionStartBalance, sessionPnL, g_SessionProfitTarget, 
+                      g_SessionMaxLoss, g_SessionTradesCount, g_SessionMaxTrades, g_SessionType);
+}
+
+void ShowLockedPanel()
+{
+    UpdateLockedPanel(g_LockReason);
+}
+
+void EnsureChartCommentsVisible()
+{
+    static datetime lastSet = 0;
+    if(TimeCurrent() - lastSet < 5) return;
+    lastSet = TimeCurrent();
+    #ifdef CHART_SHOW_COMMENT
+    ChartSetInteger(0, CHART_SHOW_COMMENT, 0, 1);
+    #endif
+    ChartRedraw(0);
+}
+
+void NotifyAlert(string message)
+{
+    Alert(message);
+    Print(message);
+    PlaySound("alert.wav");
+}
+
+void MonitorSessionLimits()
+{
+    EnsureChartCommentsVisible();
+    int currentCount = CalculateSessionTradesCount();
+    if(currentCount != g_SessionTradesCount)
+    {
+        g_SessionTradesCount = currentCount;
+        SaveSessionConfig();
+    }
+
+    EnsureLockState();
+    if(g_TradingLocked)
+    {
+        EnforceTradingLock();
+        ShowLockedPanel();
+        return;
+    }
+
+    if(g_DebugAutoMgmt)
+    {
+        static datetime lastDebug = 0;
+        if(TimeCurrent() - lastDebug >= 5)
+        {
+            lastDebug = TimeCurrent();
+            // Print("[AUTO-MGMT] pnl=", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY) - g_SessionStartBalance, 2),
+            //       " equity=", DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2),
+            //       " start_equity=", DoubleToString(g_SessionStartBalance, 2),
+            //       " trades=", g_SessionTradesCount, "/", g_SessionMaxTrades,
+            //       " locked=", g_TradingLocked);
+        }
+    }
+
+    EnsureDayBaseline();
+    if(g_SessionStartBalance <= 0)
+    {
+        g_SessionStartBalance = g_DayStartBalance;
+        if(g_SessionStartBalance <= 0) g_SessionStartBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+        if(g_SessionStartBalance <= 0) g_SessionStartBalance = AccountInfoDouble(ACCOUNT_EQUITY);
+    }
+    double currentEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+    double sessionPnL = currentEquity - g_SessionStartBalance;
+    
+    if(g_SessionProfitTarget > 0 && sessionPnL >= g_SessionProfitTarget)
+    {
+        // Print("OBJETIVO ALCANZADO: +$", sessionPnL);
+        CloseAllTrades("Objetivo de ganancia alcanzado");
+        LockTrading("OBJETIVO_ALCANZADO", "Ganancia objetivo alcanzada: $" + DoubleToString(sessionPnL, 2));
+        NotifyJournal("TARGET_REACHED", sessionPnL);
+        return;
+    }
+    
+    if(g_SessionMaxLoss > 0 && sessionPnL <= -g_SessionMaxLoss)
+    {
+        // Print("PERDIDA MAXIMA ALCANZADA: -$", MathAbs(sessionPnL));
+        CloseAllTrades("Pérdida máxima alcanzada");
+        LockTrading("MAX_LOSS_REACHED", "Pérdida máxima alcanzada: -$" + DoubleToString(MathAbs(sessionPnL), 2));
+        NotifyJournal("MAX_LOSS_REACHED", sessionPnL);
+        return;
+    }
+    
+    if(g_SessionMaxTrades > 0 && g_SessionTradesCount > g_SessionMaxTrades)
+    {
+        // Print("MAXIMO DE TRADES SUPERADO (", g_SessionTradesCount, "/", g_SessionMaxTrades, ")");
+        CloseAllTrades("Maximo de trades superado");
+        LockTrading("MAX_TRADES_REACHED", "Maximo de trades superado: " + IntegerToString(g_SessionTradesCount));
+        NotifyJournal("MAX_TRADES_REACHED", sessionPnL);
+        return;
+    }
+    
+    double targetPct = 0;
+    if(g_SessionProfitTarget > 0)
+        targetPct = (sessionPnL / g_SessionProfitTarget) * 100.0;
+    
+    ShowActivePanel(sessionPnL, targetPct);
+}
+
+//+------------------------------------------------------------------+
+void LockTrading(string reason, string message)
+{
+    g_TradingLocked = true;
+    g_LockReason = message;
+    g_LockDate = TimeToString(TimeCurrent(), TIME_DATE);
+    SaveLockState();
+    // Print("[AUTO-MGMT] Trading bloqueado: ", message);
+    
+    EnsureChartCommentsVisible();
+    ShowLockedPanel();
+}
+
+void CloseAllTrades(string reason)
+{
+    // Print("CERRANDO TODOS LOS TRADES. Razon: ", reason);
+    int totalClosed = 0;
+    
+    for(int i = PositionsTotal() - 1; i >= 0; i--)
+    {
+        ulong ticket = PositionGetTicket(i);
+        if(ticket == 0) continue;
+        
+        if(g_Trade.PositionClose(ticket))
+        {
+            totalClosed++;
+            // Print("   Trade #", (int)ticket, " cerrado");
+        }
+        else
+        {
+            // Print("   No se pudo cerrar #", (int)ticket, " (", GetLastError(), ")");
+        }
+    }
+    
+    // Print("Total trades cerrados: ", totalClosed);
+    if(totalClosed > 0)
+    {
+        // Print("[AUTO-MGMT] Trades cerrados: ", totalClosed, " - ", reason);
+    }
+}
+
+void NotifyJournal(string eventType, double pnl)
+{
+    string json = "{" 
+        "\"type\":\"session_event\"," 
+        "\"event\":\"" + eventType + "\"," 
+        "\"account\":" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN)) + "," 
+        "\"pnl\":" + DoubleToString(pnl, 2) + "," 
+        "\"trades_count\":" + IntegerToString(g_SessionTradesCount) + "," 
+        "\"timestamp\":" + IntegerToString(TimeCurrent()) +
+    "}";
+    
+    SendToEndpoint(json, "/api/mt-sync");
+}
+
+void DeactivateSession()
+{
+    // Print("========================================");
+    // Print("DESACTIVANDO GESTION AUTOMATICA");
+    // Print("========================================");
+    
+    g_AutoManagementActive = false;
+    g_SessionRestorePending = false;
+    
+    // 🔧 FIX: Siempre limpiar el bloqueo al desactivar sesión
+    // Esto permite que el usuario pueda operar manualmente después de desactivar
+    g_TradingLocked = false;
+    g_LockReason = "";
+    g_LockDate = "";
+    SaveLockState();  // Elimina el archivo _lock.txt
+    
+    EnsureChartCommentsVisible();
+    Comment("");
+    
+    // 🆕 Actualizar panel a estado INACTIVO
+    UpdateInactivePanel();
+    
+    NotifyAlert("Gestion automatica DESACTIVADA.");
+    
+    // Print("[AUTO-MGMT] Gestion automatica desactivada");
+    DeleteSessionConfig();
+}
+
+//+------------------------------------------------------------------+
+int OnInit()
+{
+    // 🆕 LIMPIAR ARCHIVOS OBSOLETOS PRIMERO (antes de cargar config)
+    // Si la instalación no existe en BD, elimina archivos locales
+    CleanupObsoleteInstallationFiles();
+    
+    if(!LoadConfigFromFile())
+    {
+        // Print("❌ Error: No se pudo cargar la configuración");
+        return INIT_FAILED;
+    }
+    
+    if(StringLen(EndpointURL) == 0)
+    {
+        // Print("❌ Error: Configuración incompleta (EndpointURL)");
+        return INIT_FAILED;
+    }
+
+    // 🆕 Cargar baseline diario si existe
+    LoadDayBaseline();
+    EnsureDayBaseline();
+
+    // 🆕 Cargar bloqueo diario si existe
+    LoadLockState();
+    EnsureLockState();
+
+    // 🆕 Cargar sesión previa si existe
+    LoadSessionConfig();
+    
+    // ❌ NO GENERAR APIKEY LOCALMENTE
+    // El servidor lo generará y lo retornará en la respuesta de RegisterInstallation()
+    // Simplemente usar el que está en el config.ini si existe, sino esperar a que se registre
+    
+    if(!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
+    {
+        // Print("⚠️ Advertencia: Trading automático deshabilitado");
+    }
+    
+    // 🆕 INICIALIZAR CONTADOR DE TRADES
+    // Esto es crítico para la detección de nuevos trades
+    g_lastOrderCount = HistoryDealsTotal();
+    // Print("📊 Contador de trades inicializado: ", g_lastOrderCount);
+    
+    // 🆕 Cargar último timestamp procesado desde archivo
+    // Usar Terminal ID (últimos 32 caracteres de TERMINAL_DATA_PATH)
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        g_terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+    }
+    else
+    {
+        g_terminalID = terminalPath;
+    }
+    
+    string stateFile = "DataBridge_MT5_" + g_terminalID + "_state.txt";
+    int stateHandle = FileOpen(stateFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    
+    // 🆕 IMPORTANTE: SIEMPRE resetear a 0 en la carga inicial
+    // Esto asegura que se sincronice el histórico completo (365 días)
+    // sin importar diferencias horarias entre servidor y cliente
+    g_lastProcessedTime = 0;
+    g_lastCashflowTime = 0;
+    g_lastCashflowTicket = 0;
+    // Print("📖 INICIALIZANDO: Sincronizará histórico completo (365 días)");
+    
+    if(stateHandle != INVALID_HANDLE)
+    {
+        // El archivo existe, pero lo ignoramos para asegurar sync completo
+        string line = FileReadString(stateHandle);
+        datetime previousTime = (datetime)StringToInteger(line);
+        FileClose(stateHandle);
+        // Print("   (Archivo _state anterior encontrado con timestamp: ", TimeToString(previousTime), ", pero será reseteado)");
+    }
+    else
+    {
+        // Print("   (No hay archivo _state previo)");
+    }
+    
+    // 🆕 AHORA SÍ configurar el timer con el SendInterval del config.ini
+    // Print("⏱️ SendInterval configurado: ", SendInterval, " segundos");
+    // Print("🎯 USANDO OnTick() PARA DETECCIÓN INSTANTÁNEA DE TRADES");
+    
+    // Registrar la instalación del EA
+    RegisterInstallation();
+    
+    // 🆕 ENVIAR DATOS DE CUENTA INMEDIATAMENTE después de registrarse
+    // El delay de 100ms permite que se procese la respuesta y se guarde el APIKey
+    Sleep(100);
+    if(StringLen(APIKey) > 0)
+    {
+        // Print("📤 Enviando datos de cuenta en OnInit()...");
+        SendAccountData();
+    }
+    
+    // 🆕 Crear panel visual al inicio
+    CreateBasePanel();
+    if(g_AutoManagementActive)
+    {
+        // Si hay sesión guardada, mostrar panel activo
+        double sessionPnL = AccountInfoDouble(ACCOUNT_EQUITY) - g_SessionStartBalance;
+        UpdateActivePanel(g_SessionStartBalance, sessionPnL, g_SessionProfitTarget,
+                          g_SessionMaxLoss, g_SessionTradesCount, g_SessionMaxTrades, g_SessionType);
+    }
+    else if(g_TradingLocked)
+    {
+        // Si está bloqueado, mostrar panel bloqueado
+        UpdateLockedPanel(g_LockReason);
+    }
+    else
+    {
+        // Si no hay sesión, mostrar panel inactivo
+        UpdateInactivePanel();
+    }
+    
+    EventSetTimer(1);
+    return INIT_SUCCEEDED;
+}
+
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+    EventKillTimer();
+    if(g_AutoManagementActive)
+    {
+        SaveSessionConfig();
+    }
+    SaveState();
+}
+
+//+------------------------------------------------------------------+
+void OnTimer()
+{
+    // 🔧 OPTIMIZACIÓN: Verificar cambios de sesión más frecuentemente (cada 5-10s)
+    // Si hay sesión activa, verificar cada 5s para detectar desactivación rápidamente
+    // Si NO hay sesión, verificar cada 10s
+    static datetime lastConfigCheck = 0;
+    int checkInterval = g_AutoManagementActive ? 5 : 10;
+    
+    if(TimeCurrent() - lastConfigCheck >= checkInterval)
+    {
+        lastConfigCheck = TimeCurrent();
+        CheckSessionConfig();
+    }
+    
+    // Estas operaciones son LOCALES, no consumen requests
+    EnsureLockState();
+    if(g_TradingLocked)
+    {
+        EnforceTradingLock();
+    }
+    if(g_AutoManagementActive)
+    {
+        MonitorSessionLimits();
+    }
+    
+    // =========================================================
+    // 🆕 DETECCIÓN DE TRADES CERRADOS VÍA TIMER (cada 3s)
+    // No depende de ticks - funciona incluso con mercado cerrado
+    // o cuando el par del gráfico no tiene actividad
+    // =========================================================
+    if(g_UserPlan != "free" && g_UserPlan != "FREE")
+    {
+        static datetime lastTradeCheck = 0;
+        if(TimeCurrent() - lastTradeCheck >= 3)
+        {
+            lastTradeCheck = TimeCurrent();
+            
+            // Detectar nuevos trades cerrados
+            datetime newestDealTime = GetNewestClosedDealTime();
+            if(newestDealTime > g_lastClosedDealTime)
+            {
+                if(g_isAccountConfirmed)
+                {
+                    SendNewTrades();
+                    SendCashflows();
+                    // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
+                    // SendNewTrades ya maneja internamente si actualizar g_lastProcessedTime
+                    g_lastClosedDealTime = newestDealTime;
+                    g_lastSendTime = TimeCurrent();
+                }
+                else
+                {
+                    SendAccountData();
+                    g_lastClosedDealTime = newestDealTime;
+                }
+            }
+            
+            // 🆕 RETRY: Si g_lastProcessedTime está atrasado respecto a g_lastClosedDealTime,
+            // significa que un envío anterior falló. Reintentar.
+            if(g_isAccountConfirmed && g_lastClosedDealTime > 0 && g_lastProcessedTime < g_lastClosedDealTime)
+            {
+                static datetime lastRetryTime = 0;
+                if(TimeCurrent() - lastRetryTime >= 15)  // Reintentar cada 15s
+                {
+                    lastRetryTime = TimeCurrent();
+                    SendNewTrades();
+                }
+            }
+            
+            // Detectar ajustes de balance (depósitos/retiros)
+            datetime newestCFTime = g_lastCashflowTime;
+            long newestCFTicket = g_lastCashflowTicket;
+            GetNewestCashflowMarker(newestCFTime, newestCFTicket);
+            if(newestCFTime > g_lastCashflowTime || (newestCFTime == g_lastCashflowTime && newestCFTicket > g_lastCashflowTicket))
+            {
+                if(g_isAccountConfirmed)
+                {
+                    SendCashflows();
+                }
+            }
+        }
+        
+        // Sincronización periódica backup (cada SendInterval = 10 min)
+        if(g_isAccountConfirmed && TimeCurrent() - g_lastSendTime >= SendInterval)
+        {
+            g_lastSendTime = TimeCurrent();
+            SendNewTrades();
+            SendCashflows();
+        }
+        
+        // 🆕 VERIFICAR SI EL NAVEGADOR NECESITA RESINCRONIZACIÓN (cada 5 minutos)
+        // Si el usuario reconecta después de sesión expirada, el servidor notifica al EA
+        static datetime lastSyncCheckTime = 0;
+        if(g_isAccountConfirmed && TimeCurrent() - lastSyncCheckTime >= 300)  // 300 = 5 minutos
+        {
+            lastSyncCheckTime = TimeCurrent();
+            CheckIfServerNeedsSyncFromBrowser();
+        }
+        
+        // Verificar confirmación cada 30s
+        static datetime lastConfirmCheckTimer = 0;
+        if(!g_isAccountConfirmed && TimeCurrent() - lastConfirmCheckTimer >= 30)
+        {
+            lastConfirmCheckTimer = TimeCurrent();
+            CheckAccountConfirmation();
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+// Guardar estado
+//+------------------------------------------------------------------+
+void SaveState()
+{
+    string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
+    string terminalID = "";
+    int pathLen = StringLen(terminalPath);
+    
+    if(pathLen >= 32)
+    {
+        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+    }
+    else
+    {
+        terminalID = StringToUpperMQL5(terminalPath);
+    }
+    
+    // 🆕 IMPORTANTE: Usar mismo formato que config - incluir account number
+    string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
+    string stateFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_state.txt";
+    // Print("💾 Guardando state en: ", stateFile);
+    
+    int handle = FileOpen(stateFile, FILE_WRITE|FILE_TXT|FILE_COMMON|FILE_ANSI);
+    if(handle != INVALID_HANDLE)
+    {
+        FileWriteString(handle, IntegerToString(g_lastProcessedTime) + "\r\n");
+        FileWriteString(handle, IntegerToString(g_lastCashflowTime) + "\r\n");
+        FileWriteString(handle, IntegerToString(g_lastCashflowTicket));
+        FileClose(handle);
+        // Print("✓ State guardado correctamente. Timestamp: ", g_lastProcessedTime);
+    }
+    else
+    {
+        // Print("❌ ERROR al guardar state: ", GetLastError());
+    }
+}
+
+//+------------------------------------------------------------------+
+void OnTick()
+{
+    // 🆕 OPTIMIZACIÓN: Evitar ejecutar múltiples veces en el mismo segundo
+    static datetime lastTickCheck = 0;
+    if(TimeCurrent() == lastTickCheck) return;
+    lastTickCheck = TimeCurrent();
+
+    // CRÍTICO: Si el plan es FREE, no hacer nada (EA desactivado)
+    if(g_UserPlan == "free" || g_UserPlan == "FREE")
+    {
+        return;
+    }
+
+    // Monitorear límites si la sesión está activa
+    if(g_AutoManagementActive)
+    {
+        MonitorSessionLimits();
+    }
+    else
+    {
+        EnsureLockState();
+        if(g_TradingLocked)
+            EnforceTradingLock();
+    }
+    
+    // SINCRONIZACIÓN DE HISTÓRICO COMPLETO cuando se confirma por PRIMERA VEZ
+    // (solo se ejecuta 1 vez en toda la vida del EA)
+    if(g_isAccountConfirmed && !g_firstTradesSyncPending)
+    {
+        g_firstTradesSyncPending = true;
+        SendNewTrades();
+        SendCashflows();
+        g_lastSendTime = TimeCurrent();
+        g_lastClosedDealTime = GetNewestClosedDealTime();
+    }
+    
+    // 🔧 NOTA: La detección de trades cerrados, sincronización periódica,
+    // verificación de confirmación y detección de cashflows se han movido
+    // a OnTimer() para funcionar INDEPENDIENTEMENTE de los ticks de mercado.
+    // OnTimer se ejecuta cada 1 segundo (EventSetTimer(1)).
+}
+
+
+//+------------------------------------------------------------------+
+void SendAccountData()
+{
+    string server = AccountInfoString(ACCOUNT_SERVER);  // "FTMO-DEMO2"
+    string broker = server;
+    int dashPos = StringFind(server, "-");
+    if(dashPos > 0) {
+        broker = StringSubstr(server, 0, dashPos);  // Extract "FTMO"
+    }
+    broker = StringToUpperMQL5(broker);
+    server = StringToUpperMQL5(server);
+    
+    string json = "{"
+        "\"type\":\"account\","
+        "\"platform\":\"MT5\","
+        "\"timestamp\":" + IntegerToString(TimeCurrent()) + ","
+        "\"account\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ","
+        "\"broker\":\"" + broker + "\","
+        "\"server\":\"" + server + "\","
+        "\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ","
+        "\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2) + ","
+        "\"margin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN), 2) + ","
+        "\"freeMargin\":" + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE), 2) + ","
+        "\"profit\":" + DoubleToString(AccountInfoDouble(ACCOUNT_PROFIT), 2) + ","
+        "\"leverage\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LEVERAGE)) +
+    "}";
+    
+    SendToEndpoint(json, "/api/mt-sync", true);
+}
+
+//+------------------------------------------------------------------+
+void SendNewTrades()
+{
+    datetime from = g_lastProcessedTime;
+    datetime to = TimeCurrent();
+    
+    // Si from es 0 (primera vez), usar hace 365 días para obtener TODOS los trades
+    if(from == 0)
+    {
+        from = TimeCurrent() - (86400 * 365);
+    }
+    
+    // 🔧 FIX CRÍTICO MT5: Si HistorySelect falla con rango antiguo, 
+    // intentar con rango más reciente (últimos 90 días)
+    int retryCount = 0;
+    bool historyOk = false;
+    
+    while(!historyOk && retryCount < 3)
+    {
+        if(HistorySelect(from, to))
+        {
+            historyOk = true;
+            // Print("✅ HistorySelect exitoso en intento #", retryCount + 1);
+            break;
+        }
+        
+        retryCount++;
+        // Print("⚠️ HistorySelect falló (intento #", retryCount, "), acortando rango...");
+        
+        // Acortar el rango: pasar de 365 días → 90 días → 30 días
+        if(retryCount == 1)
+        {
+            from = TimeCurrent() - (86400 * 90);  // 90 días
+            // Print("   Reintentando con últimos 90 días...");
+        }
+        else if(retryCount == 2)
+        {
+            from = TimeCurrent() - (86400 * 30);  // 30 días
+            // Print("   Reintentando con últimos 30 días...");
+        }
+    }
+    
+    if(!historyOk)
+    {
+        // Print("❌ HistorySelect sigue fallando tras 3 intentos - SALIENDO");
+        // Print("   Esto puede ser normal si el broker no tiene historial disponible");
+        // Print("   Reintentaremos en el próximo tick");
+        return;
+    }
+    
+    string tradesJson = "[";
+    int total = HistoryDealsTotal();
+    // Print("DEBUG: Total deals en rango: ", total);
+    // Print("DEBUG: Rango de búsqueda - FROM: ", TimeToString(from), " TO: ", TimeToString(to));
+    // Print("DEBUG: g_lastProcessedTime = ", g_lastProcessedTime, " (", TimeToString(g_lastProcessedTime), ")");
+    int sent = 0;
+    bool sessionTradesUpdated = false;
+    // 🔧 FIX: Inicializar con TimeCurrent() para evitar quedarse con timestamps futuros
+    // Si g_lastProcessedTime > TimeCurrent(), eso es un error del sistema
+    datetime newestTime = g_lastProcessedTime;
+    if(newestTime > TimeCurrent())
+    {
+        // Print("⚠️ FIX APLICADO: g_lastProcessedTime es FUTURO, reseteando a ahora");
+        newestTime = TimeCurrent();
+    }
+    
+    // Usar array para rastrear POSICIONES ya procesadas (no deals)
+    // Esto evita duplicados cuando hay múltiples deals de cierre para la misma posición
+    ulong processedPositions[];
+    ArrayResize(processedPositions, 0);
+    
+    for(int i = 0; i < total; i++)
+    {
+        ulong ticket = HistoryDealGetTicket(i);
+        if(ticket <= 0) continue;
+        
+        long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+        
+        // 🔧 FIX: Solo procesar deals de tipo BUY o SELL (ignorar BALANCE, CREDIT, etc.)
+        if(dealType != DEAL_TYPE_BUY && dealType != DEAL_TYPE_SELL)
+            continue;
+        
+        // 🆕 MEJORADA: Aceptar CUALQUIER deal que tenga posición asociada
+        // y procesar SOLO los deals de salida (exit) para evitar duplicados
+        ulong positionId = HistoryDealGetInteger(ticket, DEAL_POSITION_ID);
+        if(positionId <= 0)
+            continue;  // Sin posición = no es un trade, saltar
+
+        long dealEntry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+        bool isExitDeal = (dealEntry == DEAL_ENTRY_OUT || dealEntry == DEAL_ENTRY_OUT_BY || dealEntry == DEAL_ENTRY_INOUT);
+        if(!isExitDeal)
+            continue;
+
+        // 🔧 FIX: Verificar si ya procesamos esta POSICIÓN (no el deal)
+        bool alreadyProcessed = false;
+        for(int j = 0; j < ArraySize(processedPositions); j++)
+        {
+            if(processedPositions[j] == positionId)
+            {
+                alreadyProcessed = true;
+                break;
+            }
+        }
+
+        if(alreadyProcessed)
+            continue;
+
+        // Marcar POSICIÓN como procesada
+        int newSize = ArraySize(processedPositions) + 1;
+        ArrayResize(processedPositions, newSize);
+        processedPositions[newSize - 1] = positionId;
+
+        // 🔧 FIX: Buscar TODOS los deals de esta posición para calcular totales
+        // Esto maneja correctamente los CIERRES PARCIALES
+        ulong entryTicket = 0;
+        long entryType = 0;
+        double entryPrice = 0;
+        datetime entryTime = 0;
+        string entrySymbol = "";
+        double entryVolume = 0;
+        double entryCommission = 0;
+        
+        // Variables para AGREGAR todos los deals de salida
+        double totalExitProfit = 0;
+        double totalExitCommission = 0;
+        double totalExitSwap = 0;
+        double totalExitVolume = 0;
+        double weightedExitPrice = 0;
+        datetime lastExitTime = 0;
+        string comment = "";
+
+        // Primer paso: encontrar deal de ENTRADA y recopilar TODOS los deals de SALIDA
+        for(int j = 0; j < total; j++)
+        {
+            ulong checkTicket = HistoryDealGetTicket(j);
+            if(checkTicket <= 0) continue;
+
+            ulong checkPosition = HistoryDealGetInteger(checkTicket, DEAL_POSITION_ID);
+            if(checkPosition != positionId) continue;
+
+            long checkEntry = HistoryDealGetInteger(checkTicket, DEAL_ENTRY);
+            long checkType = HistoryDealGetInteger(checkTicket, DEAL_TYPE);
+            datetime checkTime = (datetime)HistoryDealGetInteger(checkTicket, DEAL_TIME);
+            
+            // Solo BUY o SELL
+            if(checkType != DEAL_TYPE_BUY && checkType != DEAL_TYPE_SELL)
+                continue;
+
+            // Deal de ENTRADA
+            if(checkEntry == DEAL_ENTRY_IN || checkEntry == DEAL_ENTRY_INOUT)
+            {
+                if(entryTicket == 0 || checkTime < entryTime)
+                {
+                    entryTicket = checkTicket;
+                    entryType = checkType;
+                    entryPrice = HistoryDealGetDouble(checkTicket, DEAL_PRICE);
+                    entryTime = checkTime;
+                    entrySymbol = HistoryDealGetString(checkTicket, DEAL_SYMBOL);
+                    entryVolume = HistoryDealGetDouble(checkTicket, DEAL_VOLUME);
+                    entryCommission = HistoryDealGetDouble(checkTicket, DEAL_COMMISSION);
+                    comment = HistoryDealGetString(checkTicket, DEAL_COMMENT);
+                }
+            }
+            // Deal de SALIDA (puede haber varios si es cierre parcial)
+            else if(checkEntry == DEAL_ENTRY_OUT || checkEntry == DEAL_ENTRY_OUT_BY || checkEntry == DEAL_ENTRY_INOUT)
+            {
+                double exitVol = HistoryDealGetDouble(checkTicket, DEAL_VOLUME);
+                double exitPrice = HistoryDealGetDouble(checkTicket, DEAL_PRICE);
+                
+                totalExitProfit += HistoryDealGetDouble(checkTicket, DEAL_PROFIT);
+                totalExitCommission += HistoryDealGetDouble(checkTicket, DEAL_COMMISSION);
+                totalExitSwap += HistoryDealGetDouble(checkTicket, DEAL_SWAP);
+                totalExitVolume += exitVol;
+                weightedExitPrice += exitPrice * exitVol;
+                
+                if(checkTime > lastExitTime)
+                    lastExitTime = checkTime;
+            }
+        }
+
+        if(entryTicket <= 0 || totalExitVolume <= 0)
+            continue;  // No encontró entrada o salida válida
+
+        // Calcular precio de salida promedio ponderado
+        double avgExitPrice = weightedExitPrice / totalExitVolume;
+        
+        // Sumar comisión de entrada
+        double totalCommission = entryCommission + totalExitCommission;
+        
+        // 🚨 ADVERTENCIA: Detectar trades con fechas en el futuro
+        if(lastExitTime > TimeCurrent())
+        {
+            continue;  // Saltar este trade
+        }
+        
+        // 🔒 Actualizar timestamp más reciente - Solo si es válido (no futuro)
+        if(lastExitTime > newestTime && lastExitTime <= TimeCurrent())
+            newestTime = lastExitTime;
+        
+        // Formateo
+        string direction = (entryType == DEAL_TYPE_BUY) ? "LONG" : "SHORT";
+        string entryTimeStr = TimeToString(entryTime, TIME_DATE|TIME_MINUTES);
+        string exitTimeStr = TimeToString(lastExitTime, TIME_DATE|TIME_MINUTES);
+        string dateStr = TimeToString(entryTime, TIME_DATE);
+        
+        // Normalizar comentario
+        string commentJson = "null";
+        if(StringLen(comment) > 0 && comment != "null" && comment != "NULL")
+        {
+            // Escapar comillas en el comentario
+            StringReplace(comment, "\"", "\\\"");
+            commentJson = "\"" + comment + "\"";
+        }
+        
+        if(sent > 0) tradesJson += ",";
+        
+        // 🔧 FIX: Usar positionId como ticket (es el ID único de la posición en MT5)
+        tradesJson += "{"
+            "\"ticket\":\"" + IntegerToString(positionId) + "\","
+            "\"pair\":\"" + entrySymbol + "\","
+            "\"direction\":\"" + direction + "\","
+            "\"date\":\"" + dateStr + "\","
+            "\"entry_time\":\"" + entryTimeStr + "\","
+            "\"exit_time\":\"" + exitTimeStr + "\","
+            "\"entry_price\":" + DoubleToString(entryPrice, 5) + ","
+            "\"exit_price\":" + DoubleToString(avgExitPrice, 5) + ","
+            "\"lot_size\":" + DoubleToString(entryVolume, 2) + ","
+            "\"profit_usd\":" + DoubleToString(totalExitProfit, 2) + ","
+            "\"commission\":" + DoubleToString(totalCommission, 2) + ","
+            "\"swap\":" + DoubleToString(totalExitSwap, 2) + ","
+            "\"comment\":" + commentJson + ","
+            "\"tradingview_url\":null"
+        "}";
+        
+        if(g_AutoManagementActive && lastExitTime >= g_SessionStartTime)
+        {
+            g_SessionTradesCount++;
+            sessionTradesUpdated = true;
+        }
+        
+        sent++;
+    }
+    
+    tradesJson += "]";
+
+    if(sessionTradesUpdated)
+    {
+        SaveSessionConfig();
+    }
+    
+    if(sent == 0)
+    {
+        // Aún sin trades nuevos, pero actualizamos el timestamp para evitar revisar los mismos trades
+        // 🔧 IMPORTANTE: Asegurar que NUNCA quedamos con timestamp futuro
+        datetime targetTime = TimeCurrent();
+        if(g_lastProcessedTime > targetTime)
+        {
+            // Print("⚠️ FIX: g_lastProcessedTime era futuro, reseteando a ahora");
+            g_lastProcessedTime = targetTime;
+        }
+        
+        // Solo si hemos avanzado en el tiempo
+        if(targetTime > g_lastProcessedTime)
+        {
+            g_lastProcessedTime = targetTime;
+            SaveState();
+            // Print("✓ Sin trades nuevos, pero actualizado timestamp a: ", TimeToString(g_lastProcessedTime));
+        }
+        return;
+    }
+    
+    // Corregir newestTime si es futuro
+    if(newestTime > TimeCurrent())
+        newestTime = TimeCurrent();
+    
+    string json = "{"
+        "\"type\":\"trades\","
+        "\"timestamp\":" + IntegerToString(TimeCurrent()) + ","
+        "\"account\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ","
+        "\"totalDeals\":" + IntegerToString(sent) + ","
+        "\"data\":" + tradesJson +
+    "}";
+    
+    // 🔧 CRÍTICO: Solo actualizar timestamp si el envío fue EXITOSO
+    // Si falla, los trades se reenviarán en el próximo ciclo
+    bool sendOk = SendToEndpoint(json, "/api/mt-sync");
+    if(sendOk)
+    {
+        if(newestTime > TimeCurrent())
+            g_lastProcessedTime = TimeCurrent();
+        else
+            g_lastProcessedTime = newestTime;
+        SaveState();
+    }
+}
+
+//+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
+// 🆕 VERIFICAR SI NECESITA RESINCRONIZAR DESDE EL SERVIDOR
+// Llamado desde OnTimer() cada 5 minutos
+// Compara hash de trades local vs remoto para detectar desincronización
+//+------------------------------------------------------------------+
+void CheckIfServerNeedsSyncFromBrowser()
+{
+    if(!g_isAccountConfirmed || g_UserPlan == "free" || g_UserPlan == "FREE")
+    {
+        return;
+    }
+
+    char emptyData[];
+    char result[];
+    string resultHeaders;
+
+    // Construir hash de trades local basado en los cerrados
+    string localHash = "";
+    {
+        datetime from = 0;  // Todos los trades
+        datetime to = TimeCurrent();
+        
+        if(HistorySelect(from, to))
+        {
+            int dealCount = HistoryDealsTotal();
+            MqlTradeRequest request = {};
+            MqlTradeResult tradeResult = {};
+            
+            string tradesStr = "";
+            for(int i = 0; i < dealCount; i++)
+            {
+                ulong dealTicket = HistoryDealGetTicket(i);
+                if(dealTicket <= 0) continue;
+                
+                long dealType = HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+                // Solo procesar closing deals (cierre de posiciones)
+                if(dealType == DEAL_TYPE_SELL || dealType == DEAL_TYPE_BUY)
+                {
+                    long dealTicketNum = HistoryDealGetInteger(dealTicket, DEAL_TICKET);
+                    datetime dealTime = (datetime)HistoryDealGetInteger(dealTicket, DEAL_TIME);
+                    string dealSymbol = HistoryDealGetString(dealTicket, DEAL_SYMBOL);
+                    double dealProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+                    
+                    tradesStr += IntegerToString(dealTicketNum) + "|" + StringSubstr(dealSymbol, 0, 10) + "|" + DoubleToString(dealProfit, 2) + "|";
+                }
+            }
+            
+            // Crear hash simple (usar StringLen como proxy)
+            localHash = tradesStr;
+        }
+    }
+
+    // Enviar petición para chequear sincronización
+    string jsonRequest = "{"
+        "\"account_number\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ","
+        "\"client_trades_hash\":\"" + localHash + "\""
+    "}";
+
+    StringToCharArray(jsonRequest, emptyData, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(emptyData, ArraySize(emptyData) - 1);
+
+    string headers = "Content-Type: application/json\r\n";
+    headers += "X-API-Key: " + APIKey + "\r\n";
+
+    int timeout = 3000;
+    string checkUrl = EndpointURL + "/api/mt-check-sync";
+
+    int res = WebRequest(
+        "POST",
+        checkUrl,
+        headers,
+        timeout,
+        emptyData,
+        result,
+        resultHeaders
+    );
+
+    if(res == 200 || res == 201)
+    {
+        string responseText = CharArrayToString(result);
+        
+        // Parse respuesta: {"sync_needed": true/false, ...}
+        if(StringFind(responseText, "\"sync_needed\":true") != -1)
+        {
+            // El servidor indica que los trades desincronizados
+            // Forzar resincronización desde MT5
+            Print("🔄 SERVIDOR SOLICITA RESYNC - Enviando trades...");
+            SendNewTrades();
+            SendCashflows();
+        }
+    }
+}
+
+bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = false)
+{
+    char data[];
+    char result[];
+    string resultHeaders;
+    
+    StringToCharArray(jsonData, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1);
+    
+    string headers = "Content-Type: application/json\r\n";
+    headers += "X-API-Key: " + APIKey + "\r\n";
+    
+    int timeout = 5000;
+    string fullUrl = EndpointURL + endpoint;
+    
+    int res = WebRequest(
+        "POST",
+        fullUrl,
+        headers,
+        timeout,
+        data,
+        result,
+        resultHeaders
+    );
+    
+    if(res == -1)
+    {
+        int error = GetLastError();
+        
+        if(error == 4060)
+        {
+            // Print("⚠️ Error 4060: URL no permitida en WebRequest");
+        }
+        return false;
+    }
+    else if(res == 200 || res == 201)
+    {
+        string responseText = CharArrayToString(result);
+        // Print("✅ Respuesta: ", responseText);
+        
+        // Parsear respuesta para detectar confirmación
+        // El worker devuelve "confirmed": 0 o 1 en la respuesta
+        if(parseAccountStatus)
+        {
+            if(StringFind(responseText, "\"confirmed\":1") != -1 || 
+               StringFind(responseText, "\"status\":\"confirmed\"") != -1)
+            {
+                if(!g_isAccountConfirmed)
+                {
+                    Print("✅✅ CUENTA CONFIRMADA! Ya se puede sincronizar");
+                    g_isAccountConfirmed = true;
+                }
+            }
+            else if(StringFind(responseText, "\"confirmed\":0") != -1)
+            {
+                Print("⏳ Cuenta pendiente de confirmación desde el journal");
+                g_isAccountConfirmed = false;
+            }
+        }
+        return true;
+    }
+    else if(res == 403)
+    {
+        Print("⚠️ Instalación pendiente de confirmación");
+    }
+    return false;
+}
+//+------------------------------------------------------------------+

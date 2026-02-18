@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TFX-Sync</title>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script crossorigin src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root {
+      --primary: #0e7490;
+      --text: #e0e0e0;
+      --primary-dark: #1085a1;
+      --glass-border: rgba(255,255,255,0.12);
+      --primary-glow: rgba(14,116,144,0.14);
+      --bg-1: #0f1724;
+      --bg-0: #0b1220;
+      --muted: #90a4ae;
+      --surface: rgba(255,255,255,0.02);
+      --negative: #ef4444;
+    }
+
+    body {
+      background-color: var(--bg-0);
+      color: var(--text);
+    }
+
+    .btn-primary {
+      background-color: var(--primary);
+      color: #000;
+      font-weight: 600;
+    }
+
+    .btn-primary:hover {
+      background-color: var(--primary-dark);
+    }
+
+    .btn-primary:disabled {
+      background-color: var(--muted);
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    .badge-installed {
+      background-color: rgba(76, 175, 80, 0.2);
+      color: #4caf50;
+      border: 1px solid rgba(76, 175, 80, 0.3);
+    }
+
+    .badge-not-installed {
+      background-color: rgba(158, 158, 158, 0.2);
+      color: var(--text);
+      border: 1px solid rgba(158, 158, 158, 0.3);
+    }
+
+    .badge-running {
+      background-color: rgba(59, 130, 246, 0.2);
+      color: #3b82f6;
+      border: 1px solid rgba(59, 130, 246, 0.3);
+    }
+
+    .badge-stopped {
+      background-color: rgba(107, 114, 128, 0.2);
+      color: var(--muted);
+      border: 1px solid rgba(107, 114, 128, 0.3);
+    }
+
+    .modal-panel {
+      backdrop-filter: blur(10px);
+    }
+
+    .modal-scroll {
+      scrollbar-width: thin;
+      scrollbar-color: rgba(14, 116, 144, 0.6) rgba(255, 255, 255, 0.06);
+    }
+
+    .modal-scroll::-webkit-scrollbar {
+      width: 10px;
+    }
+
+    .modal-scroll::-webkit-scrollbar-track {
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 999px;
+    }
+
+    .modal-scroll::-webkit-scrollbar-thumb {
+      background: linear-gradient(180deg, rgba(14, 116, 144, 0.9), rgba(26, 166, 195, 0.9));
+      border-radius: 999px;
+      border: 2px solid rgba(255, 255, 255, 0.08);
+    }
+
+    .modal-scroll::-webkit-scrollbar-thumb:hover {
+      background: linear-gradient(180deg, rgba(26, 166, 195, 1), rgba(14, 116, 144, 1));
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+  <script type="text/babel" src="App.jsx"></script>
+  <script type="text/babel" src="index.jsx"></script>
+</body>
+</html>
