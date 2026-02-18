@@ -1,6 +1,6 @@
 {
   "name": "tfx-sync",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "MT4/MT5 Expert Advisor Installer",
   "author": "MDFX",
   "main": "src/main/main.js",
@@ -16,6 +16,11 @@
     "directories": {
       "output": "dist"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "monkeydfx",
+      "repo": "MDFX-exporter"
+    },
     "files": [
       "src/**/*",
       "package.json"
@@ -29,7 +34,7 @@
     "win": {
       "target": "nsis",
       "icon": "src/assets/icons/icon.ico",
-      "artifactName": "TFX-Sync-1.0.${ext}"
+      "artifactName": "TFX-Sync-${version}.${ext}"
     },
     "mac": {
       "target": "dmg",
@@ -56,6 +61,7 @@
   },
   "dependencies": {
     "dotenv": "^17.2.3",
+    "electron-updater": "^6.1.7",
     "iconv-lite": "^0.7.0",
     "sudo-prompt": "^9.2.1",
     "uuid": "^9.0.0"

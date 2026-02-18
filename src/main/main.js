@@ -1,6 +1,7 @@
 const { app, BrowserWindow, dialog } = require('electron');
 const path = require('path');
 const { execSync } = require('child_process');
+const { autoUpdater } = require('electron-updater');
 require('dotenv').config();
 
 // Importar servicios
@@ -68,6 +69,9 @@ app.whenReady().then(() => {
     // Crear ventana
     createWindow();
 
+    // 🆕 Configurar electron-updater
+    setupAutoUpdater();
+
     // Registrar handlers IPC
     registerHandlers(mainWindow);
 
@@ -126,5 +130,40 @@ process.on('unhandledRejection', (reason, promise) => {
     promise: String(promise)
   });
 });
+
+/**
+ * 🆕 Configurar auto-updates con electron-updater
+ */
+function setupAutoUpdater() {
+  try {
+    // Configurar electron-updater
+    autoUpdater.checkForUpdatesAndNotify();
+    
+    // Event: Nueva versión disponible
+    autoUpdater.on('update-available', (info) => {
+      logger.info('🆕 Nueva versión disponible:', { version: info.version });
+      if (mainWindow) {
+        mainWindow.webContents.send('update-available', info);
+      }
+    });
+
+    // Event: Update descargado
+    autoUpdater.on('update-downloaded', (info) => {
+      logger.info('✅ Update descargado. Se aplicará al reiniciar.', { version: info.version });
+      if (mainWindow) {
+        mainWindow.webContents.send('update-downloaded', info);
+      }
+    });
+
+    // Event: Error en actualizacion
+    autoUpdater.on('error', (err) => {
+      logger.warn('⚠️ Error en auto-updater', { error: err.message });
+    });
+
+    logger.success('✓ Auto-updater configurado');
+  } catch (err) {
+    logger.warn('⚠️ No se pudo configurar auto-updater', { error: err.message });
+  }
+}
 
 
