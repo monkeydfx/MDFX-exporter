@@ -8,6 +8,10 @@ on:
       - 'MDFX-Exporter'
   workflow_dispatch:
 
+permissions:
+  contents: write
+  actions: read
+
 jobs:
   build-windows:
     runs-on: windows-latest
