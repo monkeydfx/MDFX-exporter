@@ -1,49 +1,58 @@
-name: Build Executables
+name: Build Release
 
 on:
   push:
+    branches:
+      - develop
     tags:
-      - 'v*'
+      - 'MDFX-Exporter'
   workflow_dispatch:
 
 jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - run: npm install
+          cache: 'npm'
+      - run: npm ci
       - run: npm run build:win
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: windows-build
-          path: dist/MDFX-Exporter-1.0.exe
+          path: dist/
 
   build-macos:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version: '18'
-      - run: npm install
+          cache: 'npm'
+      - run: npm ci
       - run: npm run build:mac
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           name: macos-build
-          path: dist/MDFX-Exporter-1.0.dmg
+          path: dist/
 
   create-release:
+    if: github.ref == 'refs/tags/MDFX-Exporter'
     needs: [build-windows, build-macos]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v3
+      - uses: actions/download-artifact@v4
+      - name: Display downloaded artifacts
+        run: find . -type f
       - uses: softprops/action-gh-release@v1
         with:
           files: |
-            windows-build/MDFX-Exporter-1.0.exe
-            macos-build/MDFX-Exporter-1.0.dmg
+            windows-build/**/*.exe
+            macos-build/**/*.dmg
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
