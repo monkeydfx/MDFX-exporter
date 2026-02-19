@@ -36,8 +36,7 @@
     "mac": {
       "target": "dmg",
       "icon": "src/assets/icons/luffy_logo.png",
-      "artifactName": "TFX-Sync-1.0.${ext}",
-      "architectures": ["x64", "arm64"]
+      "artifactName": "TFX-Sync-1.0.${ext}"
     },
     "linux": {
       "target": "AppImage",
