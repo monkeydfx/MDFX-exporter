@@ -2789,10 +2789,12 @@ void SendNewTrades()
         newestTime = TimeCurrent();
     }
     
-    // Usar array para rastrear POSICIONES ya procesadas (no deals)
-    // Esto evita duplicados cuando hay múltiples deals de cierre para la misma posición
+    // 🔧 FIX: Usar array para rastrear POSICIONES ya procesadas y también TICKETS DE ENTRADA
+    // Esto maneja correctamente cierres parciales donde cada salida crea un DEAL_POSITION_ID diferente
     ulong processedPositions[];
+    ulong processedEntryTickets[];  // 🆕 También rastrear tickets de entrada
     ArrayResize(processedPositions, 0);
+    ArrayResize(processedEntryTickets, 0);
     
     for(int i = 0; i < total; i++)
     {
@@ -2905,6 +2907,25 @@ void SendNewTrades()
 
         if(entryTicket <= 0 || totalExitVolume <= 0)
             continue;  // No encontró entrada o salida válida
+        
+        // 🆕 VERIFICAR si ya procesamos este TICKET DE ENTRADA (para evitar duplicados de cierres parciales)
+        bool entryAlreadyDone = false;
+        for(int j = 0; j < ArraySize(processedEntryTickets); j++)
+        {
+            if(processedEntryTickets[j] == entryTicket)
+            {
+                entryAlreadyDone = true;
+                break;
+            }
+        }
+        
+        if(entryAlreadyDone)
+            continue;
+        
+        // Marcar este TICKET DE ENTRADA como procesado
+        int sizeEntry = ArraySize(processedEntryTickets) + 1;
+        ArrayResize(processedEntryTickets, sizeEntry);
+        processedEntryTickets[sizeEntry - 1] = entryTicket;
 
         // Calcular precio de salida promedio ponderado
         double avgExitPrice = weightedExitPrice / totalExitVolume;
