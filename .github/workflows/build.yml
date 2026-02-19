@@ -16,6 +16,8 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:win
+        env:
+          ELECTRON_BUILDER_SKIP_PUBLISH: true
       - name: Check artifacts
         run: ls dist/
       - uses: softprops/action-gh-release@v1
@@ -38,6 +40,8 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:mac
+        env:
+          ELECTRON_BUILDER_SKIP_PUBLISH: true
       - name: Check artifacts
         run: ls dist/
       - uses: softprops/action-gh-release@v1
