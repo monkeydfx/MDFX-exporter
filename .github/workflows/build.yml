@@ -16,6 +16,8 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:win
+      - name: Check artifacts
+        run: ls dist/
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -36,6 +38,8 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:mac
+      - name: Check artifacts
+        run: ls dist/
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:

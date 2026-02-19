@@ -19,6 +19,7 @@
     "files": [
       "src/main/**/*",
       "src/assets/**/*",
+      "src/renderer/index.html",
       "package.json"
     ],
     "extraResources": [
