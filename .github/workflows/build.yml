@@ -41,12 +41,12 @@ jobs:
       - run: npm install
       - run: npm run build:mac
       - name: Check artifacts
-        run: ls dist/
+        run: ls -la dist/mac-arm64/ || ls -la dist/
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: MDFX-Exporter
-          files: dist/TFX-Sync-1.0.dmg
+          files: dist/mac-arm64/*.dmg
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
