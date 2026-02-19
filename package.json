@@ -16,11 +16,6 @@
     "directories": {
       "output": "dist"
     },
-    "publish": {
-      "provider": "github",
-      "owner": "monkeydfx",
-      "repo": "MDFX-exporter"
-    },
     "files": [
       "src/**/*",
       "package.json"
