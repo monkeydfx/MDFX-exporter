@@ -99,11 +99,11 @@
 <body>
   <div id="root"></div>
   
-  <!-- Cargar App.jsx primero -->
-  <script type="text/babel" src="App.jsx"></script>
+  <!-- Cargar App.js compilado (pre-compilado desde App.jsx) -->
+  <script src="dist/App.js"></script>
   
   <!-- Luego renderizar -->
-  <script type="text/babel" src="index.jsx"></script>
+  <script src="dist/index.js"></script>
   
   <!-- Error handling: Si React no se montó en 3 segundos, mostrar error -->
   <script>
@@ -120,7 +120,7 @@
       const root = document.getElementById('root');
       if (!window.appLoaded && (!root || root.innerHTML.trim() === '')) {
         console.error('❌ ERROR: La aplicación no se pudo cargar');
-        console.error('App.jsx no se encontró o no se ejecutó');
+        console.error('dist/App.js o dist/index.js no se encontró');
         console.error('window.App:', window.App);
         console.error('window.electronAPI:', window.electronAPI);
         
@@ -138,9 +138,12 @@
             padding: 20px;
           ">
             <h1 style="color: #ff6b6b; margin-top: 0;">❌ Error al cargar la aplicación</h1>
-            <p style="color: #90a4ae; margin: 10px 0;">Los archivos de la aplicación no se encontraron.</p>
+            <p style="color: #90a4ae; margin: 10px 0;">Los archivos compilados de la aplicación no se encontraron.</p>
             <p style="color: #90a4ae; font-size: 12px; margin: 20px 0; font-family: monospace;">
-              Posible causa: Los archivos JSX no se incluyeron en el build final.
+              Intenta:
+              <br/>1. Cierra la app
+              <br/>2. Vuelve a descargar el instalador
+              <br/>3. Reinstala
             </p>
             <button onclick="location.reload()" style="
               padding: 10px 20px;

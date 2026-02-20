@@ -5,10 +5,11 @@
   "author": "MDFX",
   "main": "src/main/main.js",
   "scripts": {
+    "prebuild": "node build-jsx.js",
     "dev": "electron .",
-    "build:win": "electron-builder --win --publish never",
-    "build:mac": "electron-builder --mac --publish never",
-    "build:linux": "electron-builder --linux --publish never"
+    "build:win": "npm run prebuild && electron-builder --win --publish never",
+    "build:mac": "npm run prebuild && electron-builder --mac --publish never",
+    "build:linux": "npm run prebuild && electron-builder --linux --publish never"
   },
   "build": {
     "appId": "com.tfx.sync",
@@ -19,7 +20,8 @@
     "files": [
       "src/main/**/*",
       "src/assets/**/*",
-      "src/renderer/**/*",
+      "src/renderer/index.html",
+      "src/renderer/dist/**/*",
       "package.json"
     ],
     "extraResources": [
@@ -36,7 +38,9 @@
     "mac": {
       "target": {
         "target": "dmg",
-        "arch": ["universal"]
+        "arch": [
+          "universal"
+        ]
       },
       "icon": "src/assets/icons/icon.icns",
       "artifactName": "TFX-Sync-1.0.${ext}"
@@ -67,6 +71,9 @@
     "uuid": "^9.0.0"
   },
   "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/plugin-transform-react-jsx": "^7.28.6",
+    "@babel/preset-env": "^7.29.0",
     "electron": "^28.0.0",
     "electron-builder": "^24.9.1",
     "react": "^18.2.0",
