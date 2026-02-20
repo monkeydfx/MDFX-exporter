@@ -143,11 +143,24 @@ class TerminalScanner {
    */
   detectTerminalType(terminalPath) {
     try {
+      const dirName = path.basename(terminalPath).toLowerCase();
+      
+      // ✅ MEJORA: Detectar también por nombre del directorio
+      if (dirName.includes('metatrader 5') || dirName.includes('metatrader5')) {
+        return 'MT5';
+      }
+      if (dirName.includes('metatrader 4') || dirName.includes('metatrader4')) {
+        return 'MT4';
+      }
+
+      // También buscar por carpetas internas
       const hasMQL4 = fs.existsSync(path.join(terminalPath, 'MQL4'));
       const hasMQL5 = fs.existsSync(path.join(terminalPath, 'MQL5'));
+      const hasTerminal = fs.existsSync(path.join(terminalPath, 'terminal.exe')) ||
+                          fs.existsSync(path.join(terminalPath, 'terminal64.exe'));
 
-      // Si tiene ambas, priorizar MT5
-      if (hasMQL5) return 'MT5';
+      // Si tiene MQL5 o terminal64, es MT5
+      if (hasMQL5 || (hasTerminal && !hasMQL4)) return 'MT5';
       if (hasMQL4) return 'MT4';
       
       return null;
@@ -173,7 +186,20 @@ class TerminalScanner {
     try {
       // 🔑 PASO CRÍTICO: Detectar si es MT4 o MT5 y aplicar lógica correspondiente
       logger.debug('   [CRÍTICO] Detectando tipo de terminal (MT4 vs MT5)...');
-      const commonPath = path.join(terminalPath, 'config', 'common.ini');
+      
+      // ✅ MEJORA: Si está en Program Files, buscar datos en AppData
+      let dataPath = terminalPath;
+      const isInProgramFiles = terminalPath.includes('Program Files');
+      if (isInProgramFiles) {
+        logger.debug('   → Terminal detectada en Program Files, buscando datos en AppData...');
+        const appDataPath = path.join(process.env.APPDATA, 'MetaQuotes', 'Terminal');
+        if (fs.existsSync(appDataPath)) {
+          dataPath = appDataPath;
+          logger.debug(`   → Usando ruta de datos: ${dataPath}`);
+        }
+      }
+      
+      const commonPath = path.join(dataPath, 'config', 'common.ini');
       let isMT5 = false;
       
       // Detectar MT5: Buscar carpeta /MQL5 o archivo con estructura UTF-16
@@ -246,7 +272,7 @@ class TerminalScanner {
         
         // PASO 1: Leer terminal.ini (MT4)
         logger.debug('   [1/4] Leyendo terminal.ini...');
-        const terminalIniPath = path.join(terminalPath, 'config', 'terminal.ini');
+        const terminalIniPath = path.join(dataPath, 'config', 'terminal.ini');
         
         if (fs.existsSync(terminalIniPath)) {
           try {
@@ -288,7 +314,7 @@ class TerminalScanner {
 
         // PASO 2: Leer common.ini (MT4 - ANSI)
         logger.debug('   [2/4] Leyendo common.ini...');
-        const commonPathMT4 = path.join(terminalPath, 'config', 'common.ini');
+        const commonPathMT4 = path.join(dataPath, 'config', 'common.ini');
         
         if (fs.existsSync(commonPathMT4)) {
           try {
@@ -320,7 +346,7 @@ class TerminalScanner {
 
         // PASO 3: Leer profiles.ini
         logger.debug('   [3/4] Leyendo profiles.ini...');
-        const profilesPath = path.join(terminalPath, 'config', 'profiles.ini');
+        const profilesPath = path.join(dataPath, 'config', 'profiles.ini');
         
         if (fs.existsSync(profilesPath)) {
           try {
@@ -350,7 +376,7 @@ class TerminalScanner {
 
         // PASO 4: Buscar en carpetas de bases
         logger.debug('   [4/4] Buscando en carpetas...');
-        const basesPath = path.join(terminalPath, 'bases');
+        const basesPath = path.join(dataPath, 'bases');
         if (account === 'N/A' && fs.existsSync(basesPath)) {
           try {
             const folders = fs.readdirSync(basesPath, { withFileTypes: true });
