@@ -5,9 +5,10 @@
  * Encapsula la comunicación con main process via IPC
  */
 
-import { useState, useCallback } from 'react';
+// Usar React global (no import)
+const { useState, useCallback } = window.React;
 
-export function useTerminals() {
+function useTerminals() {
   const [terminals, setTerminals] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -138,3 +139,6 @@ export function useTerminals() {
     installManual
   };
 }
+
+// ✅ Asignar a window para acceso global
+window.useTerminals = useTerminals;

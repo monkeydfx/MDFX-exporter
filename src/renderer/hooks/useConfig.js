@@ -5,9 +5,10 @@
  * Email, installationId, etc.
  */
 
-import { useState, useCallback, useEffect } from 'react';
+// Usar React global (no import)
+const { useState, useCallback, useEffect } = window.React;
 
-export function useConfig() {
+function useConfig() {
   const [config, setConfig] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -124,3 +125,6 @@ export function useConfig() {
     getInstallationId
   };
 }
+
+// ✅ Asignar a window para acceso global
+window.useConfig = useConfig;

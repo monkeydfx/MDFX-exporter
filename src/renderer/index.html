@@ -99,10 +99,15 @@
 <body>
   <div id="root"></div>
   
-  <!-- Cargar App.js (que contiene JSX) -->
+  <!-- Cargar primero los hooks (dependen de React global) -->
+  <script type="text/babel" src="hooks/useTerminals.js"></script>
+  <script type="text/babel" src="hooks/useConfig.js"></script>
+  <script type="text/babel" src="hooks/useConnectivity.js"></script>
+  
+  <!-- Luego cargar App.js (depende de React y hooks) -->
   <script type="text/babel" src="App.js"></script>
   
-  <!-- Luego renderizar -->
+  <!-- Finalmente renderizar -->
   <script type="text/babel" src="index.js"></script>
   
   <!-- Error handling: Si React no se montó en 3 segundos, mostrar error -->

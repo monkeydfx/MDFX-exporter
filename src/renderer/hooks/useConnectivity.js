@@ -4,9 +4,10 @@
  * Gestiona la conectividad con el Worker
  */
 
-import { useState, useCallback, useEffect } from 'react';
+// Usar React global (no import)
+const { useState, useCallback, useEffect } = window.React;
 
-export function useConnectivity() {
+function useConnectivity() {
   const [isConnected, setIsConnected] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -70,3 +71,6 @@ export function useConnectivity() {
     checkConnectivity
   };
 }
+
+// ✅ Asignar a window para acceso global
+window.useConnectivity = useConnectivity;
