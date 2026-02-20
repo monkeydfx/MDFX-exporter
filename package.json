@@ -34,7 +34,10 @@
       "artifactName": "TFX-Sync.exe"
     },
     "mac": {
-      "target": "dmg",
+      "target": {
+        "target": "dmg",
+        "arch": ["universal"]
+      },
       "icon": "src/assets/icons/luffy_logo.png",
       "artifactName": "TFX-Sync-1.0.${ext}"
     },
