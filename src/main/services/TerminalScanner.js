@@ -14,6 +14,7 @@ const Terminal = require('../models/Terminal');
 const logger = require('./Logger');
 const EncodingDetector = require('../utils/EncodingDetector');
 const TerminalIDGenerator = require('../utils/TerminalIDGenerator');
+const PlatformPathManager = require('./PlatformPathManager');
 
 class TerminalScanner {
   constructor() {
@@ -22,37 +23,11 @@ class TerminalScanner {
   }
 
   /**
-   * Inicializa las rutas de búsqueda en Windows
+   * Inicializa las rutas de búsqueda según la plataforma (Windows, macOS, Linux)
    * @returns {array} - Array de rutas a buscar
    */
   initializeSearchPaths() {
-    const paths = [];
-    const appData = process.env.APPDATA;
-
-    if (appData) {
-      // 1. APPDATA/MetaQuotes (búsqueda recursiva)
-      const metaquotesPath = path.join(appData, 'MetaQuotes', 'Terminal');
-      paths.push(metaquotesPath);
-
-      // 2. APPDATA/MetaQuotes/Terminal (por si acaso)
-      paths.push(path.join(appData, 'MetaQuotes'));
-    }
-
-    // 3. Program Files
-    const programFiles = process.env['ProgramFiles'];
-    if (programFiles) {
-      paths.push(path.join(programFiles, 'MetaTrader 4'));
-      paths.push(path.join(programFiles, 'MetaTrader 5'));
-    }
-
-    // 4. Program Files (x86)
-    const programFilesX86 = process.env['ProgramFiles(x86)'];
-    if (programFilesX86) {
-      paths.push(path.join(programFilesX86, 'MetaTrader 4'));
-      paths.push(path.join(programFilesX86, 'MetaTrader 5'));
-    }
-
-    return paths;
+    return PlatformPathManager.getTerminalSearchPaths();
   }
 
   async scanTerminals() {

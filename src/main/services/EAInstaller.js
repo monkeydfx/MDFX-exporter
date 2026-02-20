@@ -12,6 +12,7 @@ const https = require('https');
 const { app, dialog } = require('electron');
 const { execSync } = require('child_process');
 const ConfigManager = require('./ConfigManager');
+const PlatformPathManager = require('./PlatformPathManager');
 const logger = require('./Logger');
 
 class EAInstaller {
@@ -125,7 +126,7 @@ class EAInstaller {
   }
 
   /**
-   * PASO 2: Preparar rutas
+   * PASO 2: Preparar rutas (multiplataforma: Windows, macOS, Linux)
    */
   preparePaths(terminal) {
     logger.info('PASO 2: PREPARAR RUTAS');
@@ -133,13 +134,12 @@ class EAInstaller {
     const mqlFolder = terminal.mqlFolder || (terminal.type === 'MT4' ? 'MQL4' : 'MQL5');
     const eaExtension = terminal.type === 'MT4' ? 'ex4' : 'ex5';
     
-    // 🆕 Usar Terminal ID (32 caracteres hex de la ruta) como identificador
-    // Nota: NO incluir account aquí, el EA lo agregará en tiempo de ejecución
-    // El EA obtiene el account via AccountNumber() y renombra el archivo
-    const configFileName = terminal.type === 'MT4'
-      ? `DataBridge_MT4_${terminal.id}_config.ini`
-      : `DataBridge_MT5_${terminal.id}_config.ini`;
+    // Nombre del archivo de configuración
+    const configFileName = PlatformPathManager.getEAConfigFileName(terminal.type, terminal.id);
 
+    // Rutas en la terminal (específicas de la plataforma)
+    const commonPath = PlatformPathManager.getCommonFilesPath(terminal.dataPath, terminal.type);
+    
     const paths = {
       mqlFolder,
       eaExtension,
@@ -157,25 +157,8 @@ class EAInstaller {
       ),
       
       // Ruta en Common (global para MT4 y MT5)
-      commonPath: path.join(
-        os.homedir(),
-        'AppData',
-        'Roaming',
-        'MetaQuotes',
-        'Terminal',
-        'Common',
-        'Files'
-      ),
-      configPath: path.join(
-        os.homedir(),
-        'AppData',
-        'Roaming',
-        'MetaQuotes',
-        'Terminal',
-        'Common',
-        'Files',
-        configFileName
-      )
+      commonPath: commonPath,
+      configPath: path.join(commonPath, configFileName)
     };
 
     logger.debug('Rutas preparadas', {
@@ -183,7 +166,8 @@ class EAInstaller {
       eaExtension: paths.eaExtension,
       configFileName: paths.configFileName,
       expertsPath: paths.expertsPath,
-      commonPath: paths.commonPath
+      commonPath: paths.commonPath,
+      platform: PlatformPathManager.getPlatformName()
     });
 
     return paths;
@@ -413,8 +397,7 @@ class EAInstaller {
         // 🔧 Config ESPECÍFICO en Common para este tipo de terminal
         {
           path: path.join(
-            os.homedir(),
-            'AppData/Roaming/MetaQuotes/Terminal/Common/Files',
+            PlatformPathManager.getCommonFilesPath(terminal.dataPath, terminal.type),
             configFileName
           ),
           desc: `Config Common ${terminal.type}`
@@ -469,7 +452,7 @@ class EAInstaller {
       const pathsToClean = [
         path.join(terminal.dataPath, mqlFolder, 'Files'),  // Ruta específica del terminal
         path.join(terminal.dataPath, mqlFolder, 'Experts'), // Alternativa en terminal
-        path.join(os.homedir(), 'AppData/Roaming/MetaQuotes/Terminal/Common/Files') // Ruta COMÚN
+        PlatformPathManager.getCommonFilesPath(terminal.dataPath, terminal.type) // Ruta COMÚN (multiplataforma)
       ];
 
       for (const filesPath of pathsToClean) {
