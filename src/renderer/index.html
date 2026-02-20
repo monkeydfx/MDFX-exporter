@@ -99,28 +99,22 @@
 <body>
   <div id="root"></div>
   
-  <!-- Cargar App.js compilado (pre-compilado desde App.jsx) -->
-  <script src="dist/App.js"></script>
+  <!-- Cargar App.js (que contiene JSX) -->
+  <script type="text/babel" src="App.js"></script>
   
   <!-- Luego renderizar -->
-  <script src="dist/index.js"></script>
+  <script type="text/babel" src="index.js"></script>
   
   <!-- Error handling: Si React no se montó en 3 segundos, mostrar error -->
   <script>
     window.appLoaded = false;
     
     // Marcar como cargado cuando React se monta
-    const originalReactRender = window.ReactDOM?.createRoot;
-    if (originalReactRender) {
-      window.appLoaded = true;
-    }
-    
-    // Verificar después de 3 segundos
     setTimeout(function() {
       const root = document.getElementById('root');
       if (!window.appLoaded && (!root || root.innerHTML.trim() === '')) {
         console.error('❌ ERROR: La aplicación no se pudo cargar');
-        console.error('dist/App.js o dist/index.js no se encontró');
+        console.error('App.js o index.js no se encontró');
         console.error('window.App:', window.App);
         console.error('window.electronAPI:', window.electronAPI);
         
@@ -138,7 +132,7 @@
             padding: 20px;
           ">
             <h1 style="color: #ff6b6b; margin-top: 0;">❌ Error al cargar la aplicación</h1>
-            <p style="color: #90a4ae; margin: 10px 0;">Los archivos compilados de la aplicación no se encontraron.</p>
+            <p style="color: #90a4ae; margin: 10px 0;">Los archivos de la aplicación no se encontraron.</p>
             <p style="color: #90a4ae; font-size: 12px; margin: 20px 0; font-family: monospace;">
               Intenta:
               <br/>1. Cierra la app
