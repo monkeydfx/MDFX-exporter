@@ -135,7 +135,9 @@ class EAInstaller {
     const eaExtension = terminal.type === 'MT4' ? 'ex4' : 'ex5';
     
     // Nombre del archivo de configuración
-    const configFileName = PlatformPathManager.getEAConfigFileName(terminal.type, terminal.id);
+    // ✅ CRÍTICO: Pasar el account number si existe para que coincida con lo que el EA espera
+    const accountNumber = terminal.account && terminal.account !== 'N/A' ? terminal.account : null;
+    const configFileName = PlatformPathManager.getEAConfigFileName(terminal.type, terminal.id, accountNumber);
 
     // Rutas en la terminal (específicas de la plataforma)
     const commonPath = PlatformPathManager.getCommonFilesPath(terminal.dataPath, terminal.type);
@@ -165,6 +167,8 @@ class EAInstaller {
       mqlFolder: paths.mqlFolder,
       eaExtension: paths.eaExtension,
       configFileName: paths.configFileName,
+      accountNumber: accountNumber,
+      terminalId: terminal.id,
       expertsPath: paths.expertsPath,
       commonPath: paths.commonPath,
       platform: PlatformPathManager.getPlatformName()

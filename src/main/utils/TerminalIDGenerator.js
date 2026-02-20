@@ -12,7 +12,42 @@ const logger = require('../services/Logger');
 
 class TerminalIDGenerator {
   /**
-   * Genera un UID único para una terminal
+   * Genera un ID de terminal IDÉNTICO a como lo calcula el EA en MQL5
+   * El EA usa: StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32))
+   * Esto toma los últimos 32 caracteres de la ruta y los convierte a mayúsculas
+   * 
+   * @param {string} terminalPath - Ruta completa de la terminal
+   * @returns {string} - ID de terminal en formato usado por el EA
+   */
+  generateEATerminalID(terminalPath) {
+    try {
+      // Tomar los últimos 32 caracteres de la ruta y convertir a mayúsculas
+      // Esto coincide exactamente con cómo el EA lo calcula
+      const pathLength = terminalPath.length;
+      let terminalID = '';
+      
+      if (pathLength >= 32) {
+        terminalID = terminalPath.substring(pathLength - 32, pathLength).toUpperCase();
+      } else {
+        terminalID = terminalPath.toUpperCase();
+      }
+      
+      logger.debug(`[TerminalIDGenerator] Terminal ID (EA algorithm):`, {
+        path: terminalPath,
+        pathLength: pathLength,
+        lastChars: pathLength >= 32 ? terminalPath.substring(pathLength - 32) : terminalPath,
+        terminalID: terminalID
+      });
+      
+      return terminalID;
+    } catch (err) {
+      logger.error(`[TerminalIDGenerator] Error generando Terminal ID`, { error: err.message });
+      throw err;
+    }
+  }
+
+  /**
+   * Genera un UID único para una terminal (fallback si no hay cuenta)
    * @param {string} terminalPath - Ruta completa de la terminal
    * @param {string} type - MT4 o MT5
    * @param {string} broker - Nombre del broker

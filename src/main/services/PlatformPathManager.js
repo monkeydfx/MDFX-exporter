@@ -74,15 +74,25 @@ class PlatformPathManager {
         'Files'
       );
     } else if (this.isMac()) {
-      // En Mac, MetaTrader almacena datos en:
-      // ~/Library/Application Support/MetaTrader 5/Terminal/Common/Files
-      const supportPath = path.join(this.homeDir, 'Library', 'Application Support');
+      // ✅ SOPORTE MEJORADO: Detectar estructura Parallels/virtualizada
+      // En Parallels: ~/Library/Application Support/MetaTrader X/drive_c/Program Files/MetaTrader X/
+      // En nativo: ~/Library/Application Support/MetaTrader X/
       
-      if (type === 'MT4') {
-        return path.join(supportPath, 'MetaTrader 4', 'Terminal', 'Common', 'Files');
-      } else {
-        return path.join(supportPath, 'MetaTrader 5', 'Terminal', 'Common', 'Files');
+      const supportPath = path.join(this.homeDir, 'Library', 'Application Support');
+      const mtFolder = type === 'MT4' ? 'MetaTrader 4' : 'MetaTrader 5';
+      
+      // Si nos dan el dataPath, analizarlo para detectar estructura virtualizada
+      if (terminalDataPath && terminalDataPath.includes('drive_c')) {
+        // Estructura Parallels: usa la ruta virtualizada
+        // El Common/Files está dentro de drive_c
+        const match = terminalDataPath.match(/(.*?drive_c.*?Program Files.*?MetaTrader \d)/i);
+        if (match) {
+          return path.join(match[1], 'Terminal', 'Common', 'Files');
+        }
       }
+      
+      // Estructura nativa estándar de macOS
+      return path.join(supportPath, mtFolder, 'Terminal', 'Common', 'Files');
     } else if (this.isLinux()) {
       // Linux: ~/.metatrader5/Terminal/Common/Files
       if (type === 'MT4') {

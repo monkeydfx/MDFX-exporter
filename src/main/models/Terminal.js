@@ -32,26 +32,18 @@ class Terminal {
 
   /**
    * Generar ID único del terminal
-   * ✓ MEJORADO: Extraer ID de la ruta del terminal (MetaTrader lo asigna automáticamente)
-   * Ruta: C:\Users\...\MetaQuotes\Terminal\[ID_32_CHARS]
-   * El MQL obtiene TERMINAL_DATA_PATH y extrae los mismos 32 caracteres
+   * ✅ CRÍTICO: Debe ser IDÉNTICO a cómo lo calcula el EA en MQL5
+   * El EA usa: StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32))
+   * Es decir: tomar los últimos 32 caracteres de la ruta y convertir a mayúsculas
    */
   generateId() {
-    // Extraer ID del terminal desde la ruta (últimos 32 caracteres = Terminal ID de MetaTrader)
-    if (this.dataPath) {
-      // El Terminal ID de MetaTrader está al final de la ruta (32 caracteres hex)
-      const parts = this.dataPath.split(/[\\/]/);
-      const lastPart = parts[parts.length - 1];
-      
-      // Si el último segmento tiene 32 caracteres hexadecimales, ese es el ID
-      if (lastPart && /^[0-9A-Fa-f]{32}$/.test(lastPart)) {
-        return lastPart.toUpperCase();
-      }
-      
-      // Fallback: si no está en el formato esperado, extraer los últimos 32 caracteres
-      if (this.dataPath.length >= 32) {
-        return this.dataPath.slice(-32).toUpperCase();
-      }
+    // ALGORITMO DEL EA: Últimos 32 caracteres de dataPath en mayúsculas
+    if (this.dataPath && this.dataPath.length >= 32) {
+      const id = this.dataPath.substring(this.dataPath.length - 32).toUpperCase();
+      return id;
+    } else if (this.dataPath) {
+      // Si la ruta es menor a 32 caracteres, usar toda en mayúsculas
+      return this.dataPath.toUpperCase();
     }
 
     // Fallback si no tenemos dataPath
