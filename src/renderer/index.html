@@ -98,7 +98,65 @@
 </head>
 <body>
   <div id="root"></div>
+  
+  <!-- Cargar App.jsx primero -->
   <script type="text/babel" src="App.jsx"></script>
+  
+  <!-- Luego renderizar -->
   <script type="text/babel" src="index.jsx"></script>
+  
+  <!-- Error handling: Si React no se montó en 3 segundos, mostrar error -->
+  <script>
+    window.appLoaded = false;
+    
+    // Marcar como cargado cuando React se monta
+    const originalReactRender = window.ReactDOM?.createRoot;
+    if (originalReactRender) {
+      window.appLoaded = true;
+    }
+    
+    // Verificar después de 3 segundos
+    setTimeout(function() {
+      const root = document.getElementById('root');
+      if (!window.appLoaded && (!root || root.innerHTML.trim() === '')) {
+        console.error('❌ ERROR: La aplicación no se pudo cargar');
+        console.error('App.jsx no se encontró o no se ejecutó');
+        console.error('window.App:', window.App);
+        console.error('window.electronAPI:', window.electronAPI);
+        
+        root.innerHTML = `
+          <div style="
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            background: linear-gradient(180deg, #0f1724 0%, #0b1220 100%);
+            color: #e0e0e0;
+            font-family: system-ui, -apple-system, sans-serif;
+            text-align: center;
+            padding: 20px;
+          ">
+            <h1 style="color: #ff6b6b; margin-top: 0;">❌ Error al cargar la aplicación</h1>
+            <p style="color: #90a4ae; margin: 10px 0;">Los archivos de la aplicación no se encontraron.</p>
+            <p style="color: #90a4ae; font-size: 12px; margin: 20px 0; font-family: monospace;">
+              Posible causa: Los archivos JSX no se incluyeron en el build final.
+            </p>
+            <button onclick="location.reload()" style="
+              padding: 10px 20px;
+              background: #0e7490;
+              color: #fff;
+              border: none;
+              border-radius: 6px;
+              cursor: pointer;
+              font-weight: bold;
+            ">
+              Reintentar
+            </button>
+          </div>
+        `;
+      }
+    }, 3000);
+  </script>
 </body>
 </html>

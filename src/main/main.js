@@ -44,9 +44,15 @@ function createWindow() {
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
-      preload: path.join(__dirname, 'preload.js')
+      sandbox: true,
+      preload: path.join(__dirname, 'preload.js'),
+      // macOS: Asegurar que las rutas relativas resuelvan correctamente
+      webSecurity: true
     },
-    icon: path.join(__dirname, '..', 'assets', 'icons', 'icon.png')
+    // macOS: Usar icono PNG como fallback si .icns no está disponible
+    icon: process.platform === 'darwin' 
+      ? undefined  // macOS usa el icono de .app automáticamente
+      : path.join(__dirname, '..', 'assets', 'icons', 'icon.png')
   });
 
   // Conectar logger a mainWindow para IPC

@@ -1314,4 +1314,8 @@ function App() {
   );
 }
 
+// Exponer para que index.jsx pueda acceder
 window.App = App;
+
+// También para ES6 modules si es necesario
+export default App;
