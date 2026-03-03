@@ -60,6 +60,12 @@ string g_DayStartDate = "";
 string g_UserPlan = "free";  // 🆕 Plan del usuario para optimizar requests
 
 //+------------------------------------------------------------------+
+// 🆕 SISTEMA DE HEARTBEAT (NUEVA FUNCIONALIDAD)
+//+------------------------------------------------------------------+
+datetime g_lastHeartbeatTime = 0;
+const int HEARTBEAT_INTERVAL = 30;  // Enviar heartbeat cada 30 segundos
+
+//+------------------------------------------------------------------+
 // 🆕 CREAR CONFIG MÍNIMO SI NO EXISTE
 // Útil para cambios de cuenta o si el archivo fue eliminado accidentalmente
 // ⚠️ SIEMPRE SOBRESCRIBE si EndpointURL está vacío (para archivos previos mal creados)
@@ -171,8 +177,8 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
         return false;
     }
     
-    char emptyData[];
-    char result[];
+    char emptyData[];  // Use char for WebRequest
+    char result[];     // Use char, not uchar
     string resultHeaders = "";
     
     string headers = "X-API-Key: " + apiKey + "\r\n";
@@ -182,13 +188,13 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     // Print("   🔄 WebRequest GET a: ", validateUrl);
     
     int res = WebRequest(
-        "GET",
-        validateUrl,
-        headers,
-        timeout,
-        emptyData,
-        result,
-        resultHeaders
+        validateUrl,  // URL first
+        "GET",        // METHOD
+        headers,      // HEADERS
+        timeout,      // TIMEOUT (integer, not data)
+        emptyData,    // DATA
+        result,       // RESULT
+        resultHeaders // RESPONSE
     );
     
     // Print("   📡 Respuesta HTTP: ", res);
@@ -777,8 +783,8 @@ int WebRequestWithRetry(
     string url,
     string headers,
     int timeout,
-    char &sendData[],
-    char &receiveData[],
+    char &sendData[],  // FIX: Use char, not uchar
+    char &receiveData[],  // FIX: Use char, not uchar
     string &receiveHeaders,
     int maxRetries = 3
 )
@@ -791,7 +797,8 @@ int WebRequestWithRetry(
         // Print("📡 WebRequest INTENTO ", (attempt + 1), "/", maxRetries);
         // Print("   URL: ", url);
         
-        int result = WebRequest(method, url, headers, timeout, sendData, receiveData, receiveHeaders);
+        // FIX: Correct MQL4 WebRequest signature: url, method, headers, timeout, data[], result[], response
+        int result = WebRequest(url, method, headers, timeout, sendData, receiveData, receiveHeaders);
         
         // ✅ Si funcionó, retornar
         if(result >= 200 && result < 300)
@@ -804,10 +811,10 @@ int WebRequestWithRetry(
         lastError = result;
         // Print("   ❌ Error ", result);
         
-        // No reintentar si es error 4xx (excepto 408, 429)
+        // No reintentar si es error 4xx (excepto 408, 409, 429)
         if(result >= 400 && result < 500)
         {
-            if(result != 408 && result != 429)
+            if(result != 408 && result != 409 && result != 429)
             {
                 // Print("   (No reintentar - error 4xx)");
                 return result;
@@ -1059,12 +1066,12 @@ void RegisterInstallation()
 //+------------------------------------------------------------------+
 void AutoConfirmInstallation(string email)
 {
-    char data[];
-    char result[];
+    char data[];  // Use char, not uchar
+    char result[];  // Use char, not uchar
     string resultHeaders = "";
     
     // JSON sin autenticación (el Worker valida por email)
-    string json = "{"
+    string json = "{"  
         "\"email\":\"" + email + "\","
         "\"autoConfirm\":true"
     "}";
@@ -1078,13 +1085,13 @@ void AutoConfirmInstallation(string email)
     string fullUrl = EndpointURL + "/api/auto-confirm-installation";
     
     int res = WebRequest(
-        "POST",
-        fullUrl,
-        headers,
-        timeout,
-        data,
-        result,
-        resultHeaders
+        fullUrl,      // URL
+        "POST",       // METHOD
+        headers,      // HEADERS
+        timeout,      // TIMEOUT
+        data,         // DATA
+        result,       // RESULT
+        resultHeaders // RESPONSE
     );
     
     if(res == 200 || res == 201)
@@ -1139,11 +1146,10 @@ void ArchiveInvalidConfigFiles(string filenameOld, string stateFileOld)
         int readHandle = FileOpen(filenameOld, FILE_READ|FILE_BIN|FILE_COMMON);
         if(readHandle != INVALID_HANDLE)
         {
-            int fileSize = FileSize(readHandle);
+            int fileSize = (int)FileSize(readHandle);  // Cast FileSize result to int
             uchar buffer[];
-            int bufSize = fileSize;
-            ArrayResize(buffer, bufSize);
-            FileReadArray(readHandle, buffer, 0, bufSize);
+            ArrayResize(buffer, fileSize);
+            FileReadArray(readHandle, buffer, 0, fileSize);
             FileClose(readHandle);
             
             int writeHandle = FileOpen(configOldName, FILE_WRITE|FILE_BIN|FILE_COMMON);
@@ -1191,11 +1197,10 @@ void ArchiveInvalidConfigFiles(string filenameOld, string stateFileOld)
         int readHandle = FileOpen(stateFileOld, FILE_READ|FILE_BIN|FILE_COMMON);
         if(readHandle != INVALID_HANDLE)
         {
-            int fileSize = FileSize(readHandle);
+            int fileSize = (int)FileSize(readHandle);  // Cast FileSize result to int
             uchar buffer[];
-            int bufSize = fileSize;
-            ArrayResize(buffer, bufSize);
-            FileReadArray(readHandle, buffer, 0, bufSize);
+            ArrayResize(buffer, fileSize);
+            FileReadArray(readHandle, buffer, 0, fileSize);
             FileClose(readHandle);
             
             int writeHandle = FileOpen(stateOldName, FILE_WRITE|FILE_BIN|FILE_COMMON);
@@ -1775,17 +1780,11 @@ void CheckSessionConfig()
     if(StringLen(EndpointURL) == 0 || StringLen(APIKey) == 0)
         return;
     
-    // 🔧 OPTIMIZACIÓN: Usuarios FREE no usan auto-management, skip polling
-    if((g_UserPlan == "free" || g_UserPlan == "FREE") && !g_AutoManagementActive && !g_SessionRestorePending)
-    {
-        return;  // No hacer requests innecesarios
-    }
+    // CAMBIO CRITICO: OnTimer ya maneja el timing (5s si activa, 10s si inactiva)
+    // Asi que NO duplicar la validacion de timing aqui
     
-    // 🆕 CAMBIO CRÍTICO: OnTimer ya maneja el timing (5s si activa, 10s si inactiva)
-    // Así que NO duplicar la validación de timing aquí
-    
-    char emptyData[];
-    char result[];
+    char emptyData[];  // Use char, not uchar
+    char result[];     // Use char, not uchar
     string resultHeaders = "";
     
     string headers = "X-API-Key: " + APIKey + "\r\n";
@@ -1794,7 +1793,7 @@ void CheckSessionConfig()
     string installationId = BuildInstallationId();
     string url = EndpointURL + "/api/check-session-config?installation_id=" + installationId;
     
-    int res = WebRequest("GET", url, headers, timeout, emptyData, result, resultHeaders);
+    int res = WebRequest(url, "GET", headers, timeout, emptyData, result, resultHeaders);
     if(res == 200)
     {
         string response = CharArrayToString(result);
@@ -2382,8 +2381,73 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+// 🆕 FUNCIÓN: Enviar Heartbeat al Servidor
+// Comunica que MT4 está vivo cada 30 segundos
+//+------------------------------------------------------------------+
+void SendHeartbeat()
+{
+    // Solo enviar si la cuenta está confirmada
+    if(!g_isAccountConfirmed || StringLen(APIKey) == 0)
+    {
+        return;  // No enviar heartbeat si aún no hay API Key
+    }
+    
+    datetime now = TimeCurrent();
+    
+    // Verificar intervalo: no enviar más de una vez cada HEARTBEAT_INTERVAL segundos
+    if(now - g_lastHeartbeatTime < HEARTBEAT_INTERVAL)
+    {
+        return;
+    }
+    
+    // Construir JSON para heartbeat
+    string jsonData = "{";
+    jsonData += "\"timestamp\":\"" + TimeToString(now, TIME_DATE | TIME_MINUTES | TIME_SECONDS) + "\",";
+    jsonData += "\"account\":" + IntegerToString(AccountNumber()) + ",";
+    jsonData += "\"balance\":\"" + DoubleToString(AccountBalance(), 2) + "\",";
+    jsonData += "\"equity\":\"" + DoubleToString(AccountEquity(), 2) + "\"";
+    jsonData += "}";
+    
+    // Enviar heartbeat al servidor
+    string headers = "Content-Type: application/json\r\nX-API-Key: " + APIKey;
+    int timeout = 3000;  // 3 segundos timeout
+    
+    char dataArray[];
+    char resultArray[];
+    string response = "";
+    
+    // Convert jsonData string to char array  
+    int jsonLen = StringLen(jsonData);
+    ArrayResize(dataArray, (uint)jsonLen);  // Explicit cast to uint
+    for(int i = 0; i < jsonLen; i++)
+    {
+        dataArray[i] = (char)StringGetChar(jsonData, i);  // Explicit cast
+    }
+    
+    int statusCode = WebRequest(
+        EndpointURL + "/api/mt-heartbeat",
+        "POST",
+        headers,
+        timeout,
+        dataArray,
+        resultArray,
+        response
+    );
+    
+    // Silent fail - no necesitamos logging agresivo
+    if(statusCode == 200 || statusCode == 201)
+    {
+        g_lastHeartbeatTime = now;  // Actualizar último time de heartbeat exitoso
+    }
+}
+
+//+------------------------------------------------------------------+
 void OnTimer()
 {
+    // 🆕 ENVIAR HEARTBEAT PRIMERO (cada 30 segundos)
+    // Comunica al servidor que MT4 sigue activo
+    SendHeartbeat();
+    
     // 🔧 OPTIMIZACIÓN: Verificar cambios de sesión más frecuentemente (cada 5-10s)
     // Si hay sesión activa, verificar cada 5s para detectar desactivación rápidamente
     // Si NO hay sesión, verificar cada 10s
@@ -2412,84 +2476,81 @@ void OnTimer()
     // No depende de ticks - funciona incluso con mercado cerrado
     // o cuando el par del gráfico no tiene actividad
     // =========================================================
-    if(g_UserPlan != "free" && g_UserPlan != "FREE")
+    static datetime lastTradeCheck = 0;
+    if(TimeCurrent() - lastTradeCheck >= 3)
     {
-        static datetime lastTradeCheck = 0;
-        if(TimeCurrent() - lastTradeCheck >= 3)
+        lastTradeCheck = TimeCurrent();
+        
+        // Detectar nuevos trades cerrados
+        datetime newestOrderTime = GetNewestClosedOrderTime();
+        if(newestOrderTime > g_lastClosedOrderTime)
         {
-            lastTradeCheck = TimeCurrent();
-            
-            // Detectar nuevos trades cerrados
-            datetime newestOrderTime = GetNewestClosedOrderTime();
-            if(newestOrderTime > g_lastClosedOrderTime)
+            if(g_isAccountConfirmed)
             {
-                if(g_isAccountConfirmed)
-                {
-                    SendNewTrades();
-                    SendCashflows();
-                    // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
-                    // SendNewTrades ya maneja internamente si actualizar g_lastProcessedTime
-                    g_lastClosedOrderTime = newestOrderTime;
-                    g_lastOrderCount = OrdersHistoryTotal();
-                    g_lastSendTime = TimeCurrent();
-                }
-                else
-                {
-                    SendAccountData();
-                    g_lastClosedOrderTime = newestOrderTime;
-                    g_lastOrderCount = OrdersHistoryTotal();
-                }
+                SendNewTrades();
+                SendCashflows();
+                // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
+                // SendNewTrades ya maneja internamente si actualizar g_lastProcessedTime
+                g_lastClosedOrderTime = newestOrderTime;
+                g_lastOrderCount = OrdersHistoryTotal();
+                g_lastSendTime = TimeCurrent();
             }
-            
-            // 🆕 RETRY: Si g_lastProcessedTime está atrasado respecto a g_lastClosedOrderTime,
-            // significa que un envío anterior falló. Reintentar.
-            if(g_isAccountConfirmed && g_lastClosedOrderTime > 0 && g_lastProcessedTime < g_lastClosedOrderTime)
+            else
             {
-                static datetime lastRetryTime = 0;
-                if(TimeCurrent() - lastRetryTime >= 15)  // Reintentar cada 15s
-                {
-                    lastRetryTime = TimeCurrent();
-                    SendNewTrades();
-                }
-            }
-            
-            // Detectar ajustes de balance (depósitos/retiros)
-            datetime newestCFTime = g_lastCashflowTime;
-            long newestCFTicket = g_lastCashflowTicket;
-            GetNewestCashflowMarker(newestCFTime, newestCFTicket);
-            if(newestCFTime > g_lastCashflowTime || (newestCFTime == g_lastCashflowTime && newestCFTicket > g_lastCashflowTicket))
-            {
-                if(g_isAccountConfirmed)
-                {
-                    SendCashflows();
-                }
+                SendAccountData();
+                g_lastClosedOrderTime = newestOrderTime;
+                g_lastOrderCount = OrdersHistoryTotal();
             }
         }
         
-        // Sincronización periódica backup (cada SendInterval = 10 min)
-        if(g_isAccountConfirmed && TimeCurrent() - g_lastSendTime >= SendInterval)
+        // 🆕 RETRY: Si g_lastProcessedTime está atrasado respecto a g_lastClosedOrderTime,
+        // significa que un envío anterior falló. Reintentar.
+        if(g_isAccountConfirmed && g_lastClosedOrderTime > 0 && g_lastProcessedTime < g_lastClosedOrderTime)
         {
-            g_lastSendTime = TimeCurrent();
-            SendNewTrades();
-            SendCashflows();
+            static datetime lastRetryTime = 0;
+            if(TimeCurrent() - lastRetryTime >= 15)  // Reintentar cada 15s
+            {
+                lastRetryTime = TimeCurrent();
+                SendNewTrades();
+            }
         }
         
-        // Verificar confirmación cada 30s
-        static datetime lastConfirmCheckTimer = 0;
-        if(!g_isAccountConfirmed && TimeCurrent() - lastConfirmCheckTimer >= 30)
+        // Detectar ajustes de balance (depósitos/retiros)
+        datetime newestCFTime = g_lastCashflowTime;
+        long newestCFTicket = g_lastCashflowTicket;
+        GetNewestCashflowMarker(newestCFTime, newestCFTicket);
+        if(newestCFTime > g_lastCashflowTime || (newestCFTime == g_lastCashflowTime && newestCFTicket > g_lastCashflowTicket))
         {
-            lastConfirmCheckTimer = TimeCurrent();
-            CheckAccountConfirmation();
+            if(g_isAccountConfirmed)
+            {
+                SendCashflows();
+            }
         }
-        
-        // 🆕 VERIFICAR SI EL NAVEGADOR NECESITA RESINCRONIZACIÓN (cada 5 minutos)
-        // Si el usuario reconecta después de sesión expirada, el servidor notifica al EA
-        static datetime lastSyncCheckTime = 0;
-        if(g_isAccountConfirmed && TimeCurrent() - lastSyncCheckTime >= 300)  // 300 = 5 minutos
-        {
-            lastSyncCheckTime = TimeCurrent();
-            CheckIfServerNeedsSyncFromBrowser();
-        }
+    }
+    
+    // Sincronización periódica backup (cada SendInterval = 10 min)
+    if(g_isAccountConfirmed && TimeCurrent() - g_lastSendTime >= SendInterval)
+    {
+        g_lastSendTime = TimeCurrent();
+        SendNewTrades();
+        SendCashflows();
+    }
+    
+    // Verificar confirmación cada 30s
+    static datetime lastConfirmCheckTimer = 0;
+    if(!g_isAccountConfirmed && TimeCurrent() - lastConfirmCheckTimer >= 30)
+    {
+        lastConfirmCheckTimer = TimeCurrent();
+        CheckAccountConfirmation();
+    }
+    
+    // 🆕 VERIFICAR SI EL NAVEGADOR NECESITA RESINCRONIZACIÓN (cada 5 minutos)
+    // Si el usuario reconecta después de sesión expirada, el servidor notifica al EA
+    static datetime lastSyncCheckTime = 0;
+    if(g_isAccountConfirmed && TimeCurrent() - lastSyncCheckTime >= 300)  // 300 = 5 minutos
+    {
+        lastSyncCheckTime = TimeCurrent();
+        CheckIfServerNeedsSyncFromBrowser();
     }
 }
 
@@ -2751,12 +2812,6 @@ void OnTick()
     if(TimeCurrent() == lastTickCheck) return;
     lastTickCheck = TimeCurrent();
 
-    // CRÍTICO: Si el plan es FREE, no hacer nada (EA desactivado)
-    if(g_UserPlan == "free" || g_UserPlan == "FREE")
-    {
-        return;
-    }
-
     // Monitorear límites si la sesión está activa
     if(g_AutoManagementActive)
     {
@@ -2978,7 +3033,7 @@ void SendNewTrades()
 //+------------------------------------------------------------------+
 void CheckIfServerNeedsSyncFromBrowser()
 {
-    if(!g_isAccountConfirmed || g_UserPlan == "free" || g_UserPlan == "FREE")
+    if(!g_isAccountConfirmed)
     {
         return;
     }
@@ -3014,8 +3069,8 @@ void CheckIfServerNeedsSyncFromBrowser()
     jsonRequest += "\"client_trades_hash\":\"" + localHash + "\"";
     jsonRequest += "}";
 
-    char postData[];
-    char result[];
+    char postData[];  // Use char, not uchar
+    char result[];    // Use char, not uchar
     string resultHeaders;
     
     StringToCharArray(jsonRequest, postData, 0, WHOLE_ARRAY, CP_UTF8);
@@ -3028,13 +3083,13 @@ void CheckIfServerNeedsSyncFromBrowser()
     string checkUrl = EndpointURL + "/api/mt-check-sync";
 
     int res = WebRequest(
-        "POST",
-        checkUrl,
-        headers,
-        timeout,
-        postData,
-        result,
-        resultHeaders
+        checkUrl,       // URL
+        "POST",         // METHOD
+        headers,        // HEADERS
+        timeout,        // TIMEOUT
+        postData,       // DATA
+        result,         // RESULT
+        resultHeaders   // RESPONSE
     );
 
     if(res == 200 || res == 201)
@@ -3056,8 +3111,8 @@ void CheckIfServerNeedsSyncFromBrowser()
 //+------------------------------------------------------------------+
 bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = false)
 {
-    char data[];
-    char result[];
+    char data[];       // Use char, not uchar
+    char result[];     // Use char, not uchar
     string resultHeaders;
     
     StringToCharArray(jsonData, data, 0, WHOLE_ARRAY, CP_UTF8);
@@ -3070,13 +3125,13 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
     string fullUrl = EndpointURL + endpoint;
     
     int res = WebRequest(
-        "POST",
-        fullUrl,
-        headers,
-        timeout,
-        data,
-        result,
-        resultHeaders
+        fullUrl,        // URL
+        "POST",         // METHOD
+        headers,        // HEADERS
+        timeout,        // TIMEOUT
+        data,           // DATA
+        result,         // RESULT
+        resultHeaders   // RESPONSE
     );
     
     if(res == -1)

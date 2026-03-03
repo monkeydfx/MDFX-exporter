@@ -53,6 +53,10 @@ datetime g_DayStartTime = 0;
 string g_DayStartDate = "";
 string g_UserPlan = "free";  // 🆕 Plan del usuario para optimizar requests
 
+// 🆕 HEARTBEAT SYSTEM
+datetime g_lastHeartbeatTime = 0;
+const int HEARTBEAT_INTERVAL = 30;  // Enviar cada 30 segundos
+
 // Trading helper
 CTrade g_Trade;
 
@@ -846,10 +850,11 @@ int WebRequestWithRetry(
         lastError = result;
         // Print("   ❌ Error ", result);
         
-        // No reintentar si es error 4xx (excepto 408, 429)
+        // No reintentar si es error 4xx (excepto 408, 409, 429)
+        // 409 = Conflict (file locking) - SÍ reintentar
         if(result >= 400 && result < 500)
         {
-            if(result != 408 && result != 429)
+            if(result != 408 && result != 409 && result != 429)
             {
                 // Print("   (No reintentar - error 4xx)");
                 return result;
@@ -962,13 +967,11 @@ void RegisterInstallation()
     
     if(res == 200 || res == 201)
     {
-        // Print("✅ INSTALACIÓN ACTIVADA EXITOSAMENTE");
-        
-        // 🆕 Parsear respuesta para obtener apiKey y confirmed status
-        string resultStr = CharArrayToString(result);
-        // Print("Respuesta JSON: ", resultStr);
-        
-        // 🆕 EXTRAER APIKEY DE LA RESPUESTA
+            Print("✅ INSTALACIÓN ACTIVADA EXITOSAMENTE");
+            
+            // 🆕 Parsear respuesta para obtener apiKey y confirmed status
+            string resultStr = CharArrayToString(result);
+            Print("Respuesta JSON: ", resultStr);
         int apiKeyPos = StringFind(resultStr, "\"api_key\":\"");
         if(apiKeyPos > 0)
         {
@@ -1886,12 +1889,6 @@ void CheckSessionConfig()
     if(StringLen(EndpointURL) == 0 || StringLen(APIKey) == 0)
         return;
     
-    // 🆕 OPTIMIZACIÓN: Usuarios FREE no usan auto-management, skip polling
-    if((g_UserPlan == "free" || g_UserPlan == "FREE") && !g_AutoManagementActive && !g_SessionRestorePending)
-    {
-        return;  // No hacer requests innecesarios
-    }
-    
     // 🆕 CAMBIO CRÍTICO: OnTimer ya maneja el timing (5s si activa, 10s si inactiva)
     // Así que NO duplicar la validación de timing aquí
     
@@ -2502,8 +2499,70 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
+// 🆕 ENVIAR HEARTBEAT CADA 30 SEGUNDOS
+// Permite que el Journal sepa que MT5 está vivo
+//+------------------------------------------------------------------+
+void SendHeartbeat()
+{
+    // Si no está confirmado, no tiene sentido enviar heartbeat
+    if(!g_isAccountConfirmed || StringLen(APIKey) == 0)
+        return;
+    
+    string json = "{";
+    json += "\"type\":\"heartbeat\",";
+    json += "\"timestamp\":" + IntegerToString(TimeCurrent()) + ",";
+    json += "\"account\":" + IntegerToString(AccountInfoInteger(ACCOUNT_LOGIN)) + ",";
+    json += "\"installation_id\":\"" + BuildInstallationId() + "\",";
+    json += "\"terminal_id\":\"" + g_terminalID + "\",";
+    json += "\"status\":\"online\",";
+    json += "\"balance\":" + DoubleToString(AccountInfoDouble(ACCOUNT_BALANCE), 2) + ",";
+    json += "\"equity\":" + DoubleToString(AccountInfoDouble(ACCOUNT_EQUITY), 2);
+    json += "}";
+    
+    char data[];
+    StringToCharArray(json, data, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(data, ArraySize(data) - 1);
+    
+    char result[];
+    string resultHeaders = "";
+    string headers = "Content-Type: application/json\r\n";
+    headers += "X-API-Key: " + APIKey + "\r\n";
+    
+    int timeout = 3000;
+    string fullUrl = EndpointURL + "/api/mt-heartbeat";
+    
+    int res = WebRequest(
+        "POST",
+        fullUrl,
+        headers,
+        timeout,
+        data,
+        result,
+        resultHeaders
+    );
+    
+    // Silencioso - no loguear a menos que falle crítico
+    if(res != 200 && res != 201)
+    {
+        int error = GetLastError();
+        if(error != 4060)
+        {
+            // Print("⚠️ Heartbeat error: ", res);
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
 void OnTimer()
 {
+    // 🆕 HEARTBEAT CADA 30 SEGUNDOS
+    static datetime lastHeartbeatTime = 0;
+    if(TimeCurrent() - lastHeartbeatTime >= HEARTBEAT_INTERVAL)
+    {
+        lastHeartbeatTime = TimeCurrent();
+        SendHeartbeat();
+    }
+    
     // 🔧 OPTIMIZACIÓN: Verificar cambios de sesión más frecuentemente (cada 5-10s)
     // Si hay sesión activa, verificar cada 5s para detectar desactivación rápidamente
     // Si NO hay sesión, verificar cada 10s
@@ -2532,82 +2591,81 @@ void OnTimer()
     // No depende de ticks - funciona incluso con mercado cerrado
     // o cuando el par del gráfico no tiene actividad
     // =========================================================
-    if(g_UserPlan != "free" && g_UserPlan != "FREE")
+    static datetime lastTradeCheck = 0;
+    if(TimeCurrent() - lastTradeCheck >= 3)
     {
-        static datetime lastTradeCheck = 0;
-        if(TimeCurrent() - lastTradeCheck >= 3)
+        lastTradeCheck = TimeCurrent();
+        
+        // Detectar nuevos trades cerrados
+        datetime newestDealTime = GetNewestClosedDealTime();
+        if(newestDealTime > g_lastClosedDealTime)
         {
-            lastTradeCheck = TimeCurrent();
-            
-            // Detectar nuevos trades cerrados
-            datetime newestDealTime = GetNewestClosedDealTime();
-            if(newestDealTime > g_lastClosedDealTime)
+            if(g_isAccountConfirmed)
             {
-                if(g_isAccountConfirmed)
-                {
-                    SendNewTrades();
-                    SendCashflows();
-                    // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
-                    // SendNewTrades ya maneja internamente si actualizar g_lastProcessedTime
-                    g_lastClosedDealTime = newestDealTime;
-                    g_lastSendTime = TimeCurrent();
-                }
-                else
-                {
-                    SendAccountData();
-                    g_lastClosedDealTime = newestDealTime;
-                }
+                Print("📤 Sincronizando trades cerrados...");
+                SendNewTrades();
+                SendCashflows();
+                // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
+                // SendNewTrades ya maneja internamente si actualizar g_lastProcessedTime
+                g_lastClosedDealTime = newestDealTime;
+                g_lastSendTime = TimeCurrent();
             }
-            
-            // 🆕 RETRY: Si g_lastProcessedTime está atrasado respecto a g_lastClosedDealTime,
-            // significa que un envío anterior falló. Reintentar.
-            if(g_isAccountConfirmed && g_lastClosedDealTime > 0 && g_lastProcessedTime < g_lastClosedDealTime)
+            else
             {
-                static datetime lastRetryTime = 0;
-                if(TimeCurrent() - lastRetryTime >= 15)  // Reintentar cada 15s
-                {
-                    lastRetryTime = TimeCurrent();
-                    SendNewTrades();
-                }
-            }
-            
-            // Detectar ajustes de balance (depósitos/retiros)
-            datetime newestCFTime = g_lastCashflowTime;
-            long newestCFTicket = g_lastCashflowTicket;
-            GetNewestCashflowMarker(newestCFTime, newestCFTicket);
-            if(newestCFTime > g_lastCashflowTime || (newestCFTime == g_lastCashflowTime && newestCFTicket > g_lastCashflowTicket))
-            {
-                if(g_isAccountConfirmed)
-                {
-                    SendCashflows();
-                }
+                Print("⚠️ NO CONFIRMADO - Enviando datos de cuenta...");
+                SendAccountData();
+                g_lastClosedDealTime = newestDealTime;
             }
         }
         
-        // Sincronización periódica backup (cada SendInterval = 10 min)
-        if(g_isAccountConfirmed && TimeCurrent() - g_lastSendTime >= SendInterval)
+        // 🆕 RETRY: Si g_lastProcessedTime está atrasado respecto a g_lastClosedDealTime,
+        // significa que un envío anterior falló. Reintentar.
+        if(g_isAccountConfirmed && g_lastClosedDealTime > 0 && g_lastProcessedTime < g_lastClosedDealTime)
         {
-            g_lastSendTime = TimeCurrent();
-            SendNewTrades();
-            SendCashflows();
+            static datetime lastRetryTime = 0;
+            if(TimeCurrent() - lastRetryTime >= 15)  // Reintentar cada 15s
+            {
+                lastRetryTime = TimeCurrent();
+                SendNewTrades();
+            }
         }
         
-        // 🆕 VERIFICAR SI EL NAVEGADOR NECESITA RESINCRONIZACIÓN (cada 5 minutos)
-        // Si el usuario reconecta después de sesión expirada, el servidor notifica al EA
-        static datetime lastSyncCheckTime = 0;
-        if(g_isAccountConfirmed && TimeCurrent() - lastSyncCheckTime >= 300)  // 300 = 5 minutos
+        // Detectar ajustes de balance (depósitos/retiros)
+        datetime newestCFTime = g_lastCashflowTime;
+        long newestCFTicket = g_lastCashflowTicket;
+        GetNewestCashflowMarker(newestCFTime, newestCFTicket);
+        if(newestCFTime > g_lastCashflowTime || (newestCFTime == g_lastCashflowTime && newestCFTicket > g_lastCashflowTicket))
         {
-            lastSyncCheckTime = TimeCurrent();
-            CheckIfServerNeedsSyncFromBrowser();
+            if(g_isAccountConfirmed)
+            {
+                SendCashflows();
+            }
         }
-        
-        // Verificar confirmación cada 30s
-        static datetime lastConfirmCheckTimer = 0;
-        if(!g_isAccountConfirmed && TimeCurrent() - lastConfirmCheckTimer >= 30)
-        {
-            lastConfirmCheckTimer = TimeCurrent();
-            CheckAccountConfirmation();
-        }
+    }
+    
+    // Sincronización periódica backup (cada SendInterval = 10 min)
+    if(g_isAccountConfirmed && TimeCurrent() - g_lastSendTime >= SendInterval)
+    {
+        g_lastSendTime = TimeCurrent();
+        SendNewTrades();
+        SendCashflows();
+    }
+    
+    // 🆕 VERIFICAR SI EL NAVEGADOR NECESITA RESINCRONIZACIÓN (cada 5 minutos)
+    // Si el usuario reconecta después de sesión expirada, el servidor notifica al EA
+    static datetime lastSyncCheckTime = 0;
+    if(g_isAccountConfirmed && TimeCurrent() - lastSyncCheckTime >= 300)  // 300 = 5 minutos
+    {
+        lastSyncCheckTime = TimeCurrent();
+        CheckIfServerNeedsSyncFromBrowser();
+    }
+    
+    // Verificar confirmación cada 30s
+    static datetime lastConfirmCheckTimer = 0;
+    if(!g_isAccountConfirmed && TimeCurrent() - lastConfirmCheckTimer >= 30)
+    {
+        lastConfirmCheckTimer = TimeCurrent();
+        CheckAccountConfirmation();
     }
 }
 
@@ -2656,12 +2714,6 @@ void OnTick()
     static datetime lastTickCheck = 0;
     if(TimeCurrent() == lastTickCheck) return;
     lastTickCheck = TimeCurrent();
-
-    // CRÍTICO: Si el plan es FREE, no hacer nada (EA desactivado)
-    if(g_UserPlan == "free" || g_UserPlan == "FREE")
-    {
-        return;
-    }
 
     // Monitorear límites si la sesión está activa
     if(g_AutoManagementActive)
@@ -3048,7 +3100,7 @@ void SendNewTrades()
 //+------------------------------------------------------------------+
 void CheckIfServerNeedsSyncFromBrowser()
 {
-    if(!g_isAccountConfirmed || g_UserPlan == "free" || g_UserPlan == "FREE")
+    if(!g_isAccountConfirmed)
     {
         return;
     }
