@@ -22,8 +22,27 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:win
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate latest.yml
+        run: |
+          node -e "
+            const fs=require('fs');
+            const crypto=require('crypto');
+            const pkg=require('./package.json');
+            const buf=fs.readFileSync('dist/TFX-Sync.exe');
+            const sha512=crypto.createHash('sha512').update(buf).digest('base64');
+            const yml=[
+              'version: '+pkg.version,
+              'files:',
+              '  - url: TFX-Sync.exe',
+              '    sha512: '+sha512,
+              '    size: '+buf.length,
+              'path: TFX-Sync.exe',
+              'sha512: '+sha512,
+              'releaseDate: \''+new Date().toISOString()+'\'',
+            ].join('\n');
+            fs.writeFileSync('dist/latest.yml',yml);
+            console.log('Generated latest.yml for v'+pkg.version);
+          "
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
@@ -46,10 +65,29 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:mac
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate latest-mac.yml
+        run: |
+          node -e "
+            const fs=require('fs');
+            const crypto=require('crypto');
+            const pkg=require('./package.json');
+            const buf=fs.readFileSync('dist/TFX-Sync-1.0.dmg');
+            const sha512=crypto.createHash('sha512').update(buf).digest('base64');
+            const yml=[
+              'version: '+pkg.version,
+              'files:',
+              '  - url: TFX-Sync-1.0.dmg',
+              '    sha512: '+sha512,
+              '    size: '+buf.length,
+              'path: TFX-Sync-1.0.dmg',
+              'sha512: '+sha512,
+              'releaseDate: \''+new Date().toISOString()+'\'',
+            ].join('\n');
+            fs.writeFileSync('dist/latest-mac.yml',yml);
+            console.log('Generated latest-mac.yml for v'+pkg.version);
+          "
       - name: Check artifacts
-        run: ls -la dist/ || echo "No artifacts"
+        run: ls -la dist/
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
