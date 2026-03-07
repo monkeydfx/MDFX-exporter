@@ -1,6 +1,6 @@
 {
   "name": "tfx-sync",
-  "version": "1.0.3",
+  "version": "1.0.4",
   "description": "MT4/MT5 Expert Advisor Installer",
   "author": "MDFX",
   "main": "src/main/main.js",

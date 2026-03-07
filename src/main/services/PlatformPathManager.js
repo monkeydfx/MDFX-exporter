@@ -9,6 +9,7 @@
 
 const path = require('path');
 const os = require('os');
+const fs = require('fs');
 
 class PlatformPathManager {
   constructor() {
@@ -43,11 +44,67 @@ class PlatformPathManager {
         paths.push(path.join(programFilesX86, 'MetaTrader 5'));
       }
     } else if (this.isMac()) {
-      // macOS: Applications y Library
-      paths.push(path.join('/Applications', 'MetaTrader 4'));
-      paths.push(path.join('/Applications', 'MetaTrader 5'));
-      paths.push(path.join(this.homeDir, 'Library', 'Application Support', 'MetaTrader 4'));
-      paths.push(path.join(this.homeDir, 'Library', 'Application Support', 'MetaTrader 5'));
+      const supportPath = path.join(this.homeDir, 'Library', 'Application Support');
+      const macUsername = os.userInfo().username;
+
+      // ─── MT5 Instalador oficial MetaQuotes (Wine) ────────────────────────────
+      // La carpeta de DATOS (MQL5, config...) vive en AppData del Wine prefix.
+      // Ruta oficial: ~/Library/Application Support/net.metaquotes.wine.metatrader5/
+      const mt5PrefixDriveC = path.join(supportPath, 'net.metaquotes.wine.metatrader5', 'drive_c');
+      for (const wineUser of [macUsername, 'user']) {
+        paths.push(path.join(mt5PrefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
+      }
+      // Instalación directa en Program Files (dentro del Wine prefix)
+      paths.push(path.join(mt5PrefixDriveC, 'Program Files'));
+
+      // ─── MT4 Instalador oficial MetaQuotes (Wine, descontinuado) ────────────
+      const mt4PrefixDriveC = path.join(supportPath, 'net.metaquotes.wine.metatrader4', 'drive_c');
+      for (const wineUser of [macUsername, 'user']) {
+        paths.push(path.join(mt4PrefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
+      }
+      paths.push(path.join(mt4PrefixDriveC, 'Program Files'));
+
+      // ─── CrossOver ──────────────────────────────────────────────────────────
+      // CrossOver guarda los bottles en ~/Library/Application Support/CrossOver/Bottles/
+      const crossoverBottlesPath = path.join(supportPath, 'CrossOver', 'Bottles');
+      if (fs.existsSync(crossoverBottlesPath)) {
+        try {
+          const bottles = fs.readdirSync(crossoverBottlesPath, { withFileTypes: true });
+          for (const bottle of bottles) {
+            if (!bottle.isDirectory()) continue;
+            const bottleDriveC = path.join(crossoverBottlesPath, bottle.name, 'drive_c');
+            paths.push(path.join(bottleDriveC, 'Program Files'));
+            for (const wineUser of [macUsername, 'user']) {
+              paths.push(path.join(bottleDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
+            }
+          }
+        } catch (_) {
+          // CrossOver no instalado o sin permisos
+        }
+      }
+
+      // ─── PlayOnMac ──────────────────────────────────────────────────────────
+      const pomPrefixPath = path.join(this.homeDir, 'Library', 'PlayOnMac', 'wineprefix');
+      if (fs.existsSync(pomPrefixPath)) {
+        try {
+          const prefixes = fs.readdirSync(pomPrefixPath, { withFileTypes: true });
+          for (const prefix of prefixes) {
+            if (!prefix.isDirectory()) continue;
+            const prefixDriveC = path.join(pomPrefixPath, prefix.name, 'drive_c');
+            paths.push(path.join(prefixDriveC, 'Program Files'));
+            for (const wineUser of [macUsername, 'user']) {
+              paths.push(path.join(prefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
+            }
+          }
+        } catch (_) {
+          // PlayOnMac no instalado
+        }
+      }
+
+      // ─── Rutas legacy / fallback (instalaciones antiguas pre-Wine 8.0.1) ─────
+      paths.push(path.join(supportPath, 'MetaTrader 5'));
+      paths.push(path.join(supportPath, 'MetaTrader 4'));
+      paths.push('/Applications');
     } else if (this.isLinux()) {
       // Linux: home directory y opt
       paths.push(path.join(this.homeDir, '.metatrader4'));
@@ -74,25 +131,36 @@ class PlatformPathManager {
         'Files'
       );
     } else if (this.isMac()) {
-      // ✅ SOPORTE MEJORADO: Detectar estructura Parallels/virtualizada
-      // En Parallels: ~/Library/Application Support/MetaTrader X/drive_c/Program Files/MetaTrader X/
-      // En nativo: ~/Library/Application Support/MetaTrader X/
-      
-      const supportPath = path.join(this.homeDir, 'Library', 'Application Support');
-      const mtFolder = type === 'MT4' ? 'MetaTrader 4' : 'MetaTrader 5';
-      
-      // Si nos dan el dataPath, analizarlo para detectar estructura virtualizada
-      if (terminalDataPath && terminalDataPath.includes('drive_c')) {
-        // Estructura Parallels: usa la ruta virtualizada
-        // El Common/Files está dentro de drive_c
-        const match = terminalDataPath.match(/(.*?drive_c.*?Program Files.*?MetaTrader \d)/i);
-        if (match) {
-          return path.join(match[1], 'Terminal', 'Common', 'Files');
+      // Si tenemos el dataPath del terminal, derivamos el Common path de él.
+      // Esto funciona para cualquier Wine prefix (oficial, CrossOver, PlayOnMac).
+      if (terminalDataPath) {
+        // Caso A: el terminal vive dentro de .../MetaQuotes/Terminal/[hash]
+        // → Common está en .../MetaQuotes/Terminal/Common/Files
+        const terminalDir = this._findMetaQuotesTerminalDir(terminalDataPath);
+        if (terminalDir) {
+          return path.join(terminalDir, 'Common', 'Files');
+        }
+
+        // Caso B: el terminal está en Program Files dentro de un Wine prefix
+        // → derivamos AppData desde drive_c
+        const driveCMatch = terminalDataPath.match(/(.*[\/\\]drive_c)/i);
+        if (driveCMatch) {
+          const driveC = driveCMatch[1];
+          const wineUser = this._getMacWineUsername(driveC);
+          return path.join(driveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal', 'Common', 'Files');
         }
       }
-      
-      // Estructura nativa estándar de macOS
-      return path.join(supportPath, mtFolder, 'Terminal', 'Common', 'Files');
+
+      // Fallback: usar el Wine prefix oficial de MetaQuotes
+      const supportPath = path.join(this.homeDir, 'Library', 'Application Support');
+      const macUsername = os.userInfo().username;
+      const prefixName = type === 'MT4'
+        ? 'net.metaquotes.wine.metatrader4'
+        : 'net.metaquotes.wine.metatrader5';
+      return path.join(
+        supportPath, prefixName, 'drive_c',
+        'users', macUsername, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal', 'Common', 'Files'
+      );
     } else if (this.isLinux()) {
       // Linux: ~/.metatrader5/Terminal/Common/Files
       if (type === 'MT4') {
@@ -129,6 +197,47 @@ class PlatformPathManager {
     } else {
       return `DataBridge_${type}_${terminalId}_config.ini`;
     }
+  }
+
+  /**
+   * Dado un path dentro de un Wine prefix, encuentra el directorio
+   * .../MetaQuotes/Terminal (padre de los hash-folders de terminal).
+   * Devuelve null si no se puede determinar.
+   * @private
+   */
+  _findMetaQuotesTerminalDir(terminalPath) {
+    if (!terminalPath) return null;
+    const normalized = terminalPath.replace(/\\/g, '/');
+    // Buscar el segmento /MetaQuotes/Terminal en la ruta
+    const marker = '/MetaQuotes/Terminal';
+    const idx = normalized.indexOf(marker);
+    if (idx === -1) return null;
+    // Reconstruimos con los separadores originales del OS
+    const rawSub = terminalPath.substring(0, idx);
+    return rawSub + path.sep + path.join('MetaQuotes', 'Terminal');
+  }
+
+  /**
+   * Dado el path de drive_c de un Wine prefix, detecta el nombre de usuario
+   * real que se usó dentro de ese prefix.
+   * @private
+   */
+  _getMacWineUsername(driveC) {
+    const macUsername = os.userInfo().username;
+    const usersPath = path.join(driveC, 'users');
+    if (!fs.existsSync(usersPath)) return macUsername;
+    try {
+      const systemFolders = new Set(['Public', 'All Users', 'Default', 'Default User']);
+      const users = fs.readdirSync(usersPath, { withFileTypes: true })
+        .filter(e => e.isDirectory() && !systemFolders.has(e.name))
+        .map(e => e.name);
+      if (users.includes(macUsername)) return macUsername;
+      if (users.includes('user')) return 'user';
+      if (users.length > 0) return users[0];
+    } catch (_) {
+      // sin permisos o directorio vacío
+    }
+    return macUsername;
   }
 
   /**

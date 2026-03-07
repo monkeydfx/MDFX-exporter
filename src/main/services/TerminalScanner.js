@@ -187,15 +187,29 @@ class TerminalScanner {
       // 🔑 PASO CRÍTICO: Detectar si es MT4 o MT5 y aplicar lógica correspondiente
       logger.debug('   [CRÍTICO] Detectando tipo de terminal (MT4 vs MT5)...');
       
-      // ✅ MEJORA: Si está en Program Files, buscar datos en AppData
+      // ✅ Si está en Program Files, buscar los datos en AppData (Windows o Wine prefix en Mac)
       let dataPath = terminalPath;
       const isInProgramFiles = terminalPath.includes('Program Files');
       if (isInProgramFiles) {
         logger.debug('   → Terminal detectada en Program Files, buscando datos en AppData...');
-        const appDataPath = path.join(process.env.APPDATA, 'MetaQuotes', 'Terminal');
-        if (fs.existsSync(appDataPath)) {
-          dataPath = appDataPath;
-          logger.debug(`   → Usando ruta de datos: ${dataPath}`);
+        let appDataTerminalPath = null;
+
+        if (process.platform === 'win32' && process.env.APPDATA) {
+          // Windows: usar variable de entorno APPDATA
+          appDataTerminalPath = path.join(process.env.APPDATA, 'MetaQuotes', 'Terminal');
+        } else if (process.platform === 'darwin') {
+          // macOS: derivar AppData desde el Wine prefix que contiene el terminal
+          const driveCMatch = terminalPath.match(/(.*[\/\\]drive_c)/i);
+          if (driveCMatch) {
+            const driveC = driveCMatch[1];
+            const wineUser = PlatformPathManager._getMacWineUsername(driveC);
+            appDataTerminalPath = path.join(driveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal');
+          }
+        }
+
+        if (appDataTerminalPath && fs.existsSync(appDataTerminalPath)) {
+          dataPath = appDataTerminalPath;
+          logger.debug(`   → Usando ruta de datos AppData: ${dataPath}`);
         }
       }
       

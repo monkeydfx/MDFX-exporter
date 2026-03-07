@@ -191,7 +191,7 @@ class EAInstaller {
       } catch (err) {
         if (['EACCES', 'EPERM'].includes(err.code)) {
           this.createWithElevation(paths.expertsPath);
-          logger.success(`✓ Carpeta Experts creada (con elevación): ${paths.expertsPath}`);
+          logger.success(`✓ Carpeta Experts creada (con permisos elevados): ${paths.expertsPath}`);
         } else {
           throw err;
         }
@@ -221,7 +221,11 @@ class EAInstaller {
       });
     } catch (err) {
       if (['EACCES', 'EPERM'].includes(err.code)) {
-        const msg = `No hay permisos para copiar EA a ${paths.targetEAPath}. Ejecuta como Administrador.`;
+        const isWin = process.platform === 'win32';
+        const hint = isWin
+          ? 'Ejecuta como Administrador.'
+          : 'Verifica los permisos de la carpeta MQL5/Experts (dentro del Wine prefix).';
+        const msg = `No hay permisos para copiar EA a ${paths.targetEAPath}. ${hint}`;
         logger.error(msg);
         throw new Error(msg);
       }
@@ -256,7 +260,7 @@ class EAInstaller {
       } catch (err) {
         if (['EACCES', 'EPERM'].includes(err.code)) {
           this.createWithElevation(paths.commonPath);
-          logger.success(`✓ Carpeta Common creada (con elevación): ${paths.commonPath}`);
+          logger.success(`✓ Carpeta Common creada (con permisos elevados): ${paths.commonPath}`);
         } else {
           throw err;
         }
@@ -285,7 +289,11 @@ class EAInstaller {
       });
     } catch (err) {
       if (['EACCES', 'EPERM'].includes(err.code)) {
-        const msg = `No hay permisos para escribir config en ${paths.configPath}. Ejecuta como Administrador.`;
+        const isWin = process.platform === 'win32';
+        const hint = isWin
+          ? 'Ejecuta como Administrador.'
+          : 'Verifica los permisos en la carpeta Terminal/Common/Files (dentro del Wine prefix).';
+        const msg = `No hay permisos para escribir config en ${paths.configPath}. ${hint}`;
         logger.error(msg);
         throw new Error(msg);
       }
@@ -602,20 +610,31 @@ class EAInstaller {
   }
 
   /**
-   * Crear directorio con elevación en Windows
+   * Crear directorio con permisos elevados (Windows) o mkdir -p (macOS/Linux)
    * @private
    */
   createWithElevation(dirPath) {
-    try {
-      const psCommand = `New-Item -ItemType Directory -Force -Path "${dirPath}" | Out-Null`;
-      execSync(`powershell -Command "${psCommand}"`, {
-        encoding: 'utf8',
-        windowsHide: true
-      });
-    } catch (err) {
-      const msg = `No se pudo crear directorio (ni con elevación): ${dirPath}`;
-      logger.error(msg, { error: err.message });
-      throw new Error(msg);
+    if (process.platform === 'win32') {
+      try {
+        const psCommand = `New-Item -ItemType Directory -Force -Path "${dirPath}" | Out-Null`;
+        execSync(`powershell -Command "${psCommand}"`, {
+          encoding: 'utf8',
+          windowsHide: true
+        });
+      } catch (err) {
+        const msg = `No se pudo crear directorio (ni con elevación): ${dirPath}. Ejecuta como Administrador.`;
+        logger.error(msg, { error: err.message });
+        throw new Error(msg);
+      }
+    } else {
+      // macOS / Linux: intentar con mkdir -p
+      try {
+        execSync(`mkdir -p "${dirPath}"`, { encoding: 'utf8' });
+      } catch (err) {
+        const msg = `No se pudo crear directorio: ${dirPath}. Verifica los permisos de la carpeta.`;
+        logger.error(msg, { error: err.message });
+        throw new Error(msg);
+      }
     }
   }
 }
