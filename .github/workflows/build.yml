@@ -22,13 +22,15 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:win
-      - name: Check artifacts
-        run: ls dist/
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: MDFX-Exporter
-          files: dist/TFX-Sync.exe
+          files: |
+            dist/TFX-Sync.exe
+            dist/latest.yml
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
@@ -44,13 +46,17 @@ jobs:
           node-version: '18'
       - run: npm install
       - run: npm run build:mac
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Check artifacts
         run: ls -la dist/ || echo "No artifacts"
       - uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
           tag_name: MDFX-Exporter
-          files: dist/TFX-Sync-1.0.dmg
+          files: |
+            dist/TFX-Sync-1.0.dmg
+            dist/latest-mac.yml
           draft: false
           prerelease: false
           fail_on_unmatched_files: false
