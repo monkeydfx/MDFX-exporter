@@ -263,6 +263,24 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
 }
 
 //+------------------------------------------------------------------+
+// Sanitiza el Terminal ID: uppercases y reemplaza caracteres no seguros con "_".
+// Necesario en Mac/Wine donde TERMINAL_DATA_PATH contiene "/" y espacios.
+// Idéntico al sanitize en Terminal.js (Node.js) y DataBridge.mq5.
+//+------------------------------------------------------------------+
+string SanitizeTerminalID(string id)
+{
+    StringToUpper(id);
+    string result = "";
+    for(int i = 0; i < StringLen(id); i++)
+    {
+        int ch = (int)StringGetCharacter(id, i);
+        bool ok = (ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57) || ch == 95;
+        result += ok ? StringSubstr(id, i, 1) : "_";
+    }
+    return result;
+}
+
+//+------------------------------------------------------------------+
 bool LoadConfigFromFile()
 {
     // Obtener Terminal ID de la ruta del terminal
@@ -271,11 +289,11 @@ bool LoadConfigFromFile()
     
     if(pathLen >= 32)
     {
-        g_terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        g_terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        g_terminalID = terminalPath;
+        g_terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string accountNum = IntegerToString(AccountNumber());
@@ -642,11 +660,11 @@ void SaveAPIKeyToConfig(string apiKey)
     
     if(pathLen >= 32)
     {
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string accountNum = IntegerToString(AccountNumber());
@@ -846,11 +864,11 @@ void RegisterInstallation()
     
     if(pathLen >= 32)
     {
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // Print("terminal id ORIGINAL: ", terminalID);
@@ -879,11 +897,9 @@ void RegisterInstallation()
     if(StringLen(server) == 0) server = "UNKNOWN";
     
     // ✅ USAR MAYÚSCULAS para garantizar coincidencia exacta con BD
-    // IMPORTANTE: StringToUpper() modifica la variable IN-PLACE y devuelve bool
-    // Por eso debemos llamarlo ANTES de usar las variables
+    // terminalID ya está sanitizado y en mayúsculas por SanitizeTerminalID()
     StringToUpper(broker);
     StringToUpper(server);
-    StringToUpper(terminalID);
     
     // 🆕 NUEVO FORMATO: ID_MT4_{terminalId}
     // El account se agrega al registrar: ID_MT4_{terminalId}_{accountNumber}
@@ -1252,11 +1268,11 @@ void CleanupObsoleteInstallationFiles()
     
     if(pathLen >= 32)
     {
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string accountNum = StringFormat("%I64d", AccountNumber());
@@ -1333,11 +1349,10 @@ string BuildInstallationId()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
-    StringToUpper(terminalID);
     return "ID_MT4_" + terminalID + "_" + IntegerToString(AccountNumber());
 }
 
@@ -1351,9 +1366,9 @@ void SaveSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString(AccountNumber());
     string configFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_session.txt";
@@ -1384,9 +1399,9 @@ void SaveDayBaseline()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString(AccountNumber());
     string dayFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_day.txt";
@@ -1409,9 +1424,9 @@ void SaveLockState()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString(AccountNumber());
     string lockFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_lock.txt";
@@ -1437,9 +1452,9 @@ void LoadLockState()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString(AccountNumber());
     string lockFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_lock.txt";
@@ -1488,9 +1503,9 @@ void LoadDayBaseline()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString(AccountNumber());
     string dayFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_day.txt";
@@ -1550,9 +1565,9 @@ void LoadSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString(AccountNumber());
     string configFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_session.txt";
@@ -1610,9 +1625,9 @@ void DeleteSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString(AccountNumber());
     string configFile = "DataBridge_MT4_" + terminalID + "_" + accountNum + "_session.txt";
@@ -2297,11 +2312,11 @@ int OnInit()
     
     if(pathLen >= 32)
     {
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // 🔑 Incluir account en el nombre del state file
@@ -2565,11 +2580,11 @@ void SaveState()
     
     if(pathLen >= 32)
     {
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // 🆕 IMPORTANTE: Usar mismo formato que config - incluir account number

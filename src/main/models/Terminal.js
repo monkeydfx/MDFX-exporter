@@ -37,13 +37,16 @@ class Terminal {
    * Es decir: tomar los últimos 32 caracteres de la ruta y convertir a mayúsculas
    */
   generateId() {
-    // ALGORITMO DEL EA: Últimos 32 caracteres de dataPath en mayúsculas
+    // ALGORITMO DEL EA: Últimos 32 caracteres de dataPath en mayúsculas y sanitizados.
+    // En Mac/Wine, TERMINAL_DATA_PATH = "...drive_c/Program Files/MetaTrader 5"
+    // → Los últimos 32 chars contienen "/" y espacios → se reemplazan por "_"
+    // → Coincide exactamente con SanitizeTerminalID() en el EA (DataBridge.mq5)
     if (this.dataPath && this.dataPath.length >= 32) {
-      const id = this.dataPath.substring(this.dataPath.length - 32).toUpperCase();
-      return id;
+      const raw = this.dataPath.substring(this.dataPath.length - 32).toUpperCase();
+      return raw.replace(/[^A-Z0-9_]/g, '_');
     } else if (this.dataPath) {
       // Si la ruta es menor a 32 caracteres, usar toda en mayúsculas
-      return this.dataPath.toUpperCase();
+      return this.dataPath.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
     }
 
     // Fallback si no tenemos dataPath

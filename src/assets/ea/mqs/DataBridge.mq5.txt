@@ -317,6 +317,25 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
 }
 
 //+------------------------------------------------------------------+
+// Sanitiza el Terminal ID para que solo contenga caracteres seguros
+// (A-Z, 0-9, _). En Mac/Wine, TERMINAL_DATA_PATH contiene "/" y espacios
+// que romperían nombres de archivo y claves de BD.
+// Idéntico al sanitize en Terminal.js (Node.js).
+//+------------------------------------------------------------------+
+string SanitizeTerminalID(string id)
+{
+    string upper = StringToUpperMQL5(id);
+    string result = "";
+    for(int i = 0; i < StringLen(upper); i++)
+    {
+        int ch = (int)StringGetCharacter(upper, i);
+        bool ok = (ch >= 65 && ch <= 90) || (ch >= 48 && ch <= 57) || ch == 95;
+        result += ok ? CharToString((uchar)ch) : "_";
+    }
+    return result;
+}
+
+//+------------------------------------------------------------------+
 bool LoadConfigFromFile()
 {
     // 🆕 Obtener Terminal ID de la ruta del terminal
@@ -326,11 +345,11 @@ bool LoadConfigFromFile()
     
     if(pathLen >= 32)
     {
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // 🆕 MULTI-ACCOUNT: Buscar en este orden:
@@ -729,11 +748,11 @@ void SaveAPIKeyToConfig(string apiKey)
     
     if(pathLen >= 32)
     {
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
@@ -882,11 +901,11 @@ void RegisterInstallation()
     
     if(pathLen >= 32)
     {
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // 🔧 EXTRAER BROKER del SERVER igual que hace la app (parte antes del "-")
@@ -906,7 +925,7 @@ void RegisterInstallation()
     // Importante: StringToUpperMQL5() devuelve string, no modifica in-place como en MQL4
     broker = StringToUpperMQL5(broker);
     server = StringToUpperMQL5(server);
-    terminalID = StringToUpperMQL5(terminalID);
+    // terminalID ya está sanitizado y en mayúsculas por SanitizeTerminalID()
     
     // 🆕 NUEVO FORMATO: ID_MT5_{terminalId}
     // El account se agrega al registrar: ID_MT5_{terminalId}_{accountNumber}
@@ -1344,11 +1363,11 @@ void CleanupObsoleteInstallationFiles()
     
     if(pathLen >= 32)
     {
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string accountNum = StringFormat("%I64d", AccountInfoInteger(ACCOUNT_LOGIN));
@@ -1431,9 +1450,9 @@ string BuildInstallationId()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     
     return "ID_MT5_" + terminalID + "_" + IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
 }
@@ -1448,9 +1467,9 @@ void SaveSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
@@ -1481,9 +1500,9 @@ void SaveDayBaseline()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string dayFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_day.txt";
@@ -1506,9 +1525,9 @@ void SaveLockState()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string lockFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_lock.txt";
@@ -1534,9 +1553,9 @@ void LoadLockState()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string lockFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_lock.txt";
@@ -1585,9 +1604,9 @@ void LoadDayBaseline()
     string terminalID = "";
     int pathLen = StringLen(terminalPath);
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
 
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string dayFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_day.txt";
@@ -1647,9 +1666,9 @@ void LoadSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
@@ -1707,9 +1726,9 @@ void DeleteSessionConfig()
     int pathLen = StringLen(terminalPath);
     
     if(pathLen >= 32)
-        terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     else
-        terminalID = terminalPath;
+        terminalID = SanitizeTerminalID(terminalPath);
     
     string accountNum = IntegerToString((int)AccountInfoInteger(ACCOUNT_LOGIN));
     string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_session.txt";
@@ -2416,11 +2435,11 @@ int OnInit()
     
     if(pathLen >= 32)
     {
-        g_terminalID = StringSubstr(terminalPath, pathLen - 32, 32);
+        g_terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        g_terminalID = terminalPath;
+        g_terminalID = SanitizeTerminalID(terminalPath);
     }
     
     string stateFile = "DataBridge_MT5_" + g_terminalID + "_state.txt";
@@ -2680,11 +2699,11 @@ void SaveState()
     
     if(pathLen >= 32)
     {
-        terminalID = StringToUpperMQL5(StringSubstr(terminalPath, pathLen - 32, 32));
+        terminalID = SanitizeTerminalID(StringSubstr(terminalPath, pathLen - 32, 32));
     }
     else
     {
-        terminalID = StringToUpperMQL5(terminalPath);
+        terminalID = SanitizeTerminalID(terminalPath);
     }
     
     // 🆕 IMPORTANTE: Usar mismo formato que config - incluir account number

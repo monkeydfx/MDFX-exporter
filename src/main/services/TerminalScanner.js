@@ -187,27 +187,14 @@ class TerminalScanner {
       // 🔑 PASO CRÍTICO: Detectar si es MT4 o MT5 y aplicar lógica correspondiente
       logger.debug('   [CRÍTICO] Detectando tipo de terminal (MT4 vs MT5)...');
       
-      // ✅ Si está en Program Files, buscar los datos en AppData (Windows o Wine prefix en Mac)
+      // ✅ En Windows, si está en Program Files, redirigir dataPath a AppData donde viven los DATOS.
+      //    En Mac/Wine, TERMINAL_DATA_PATH = Program Files (es también la carpeta de datos), NO redirigir.
       let dataPath = terminalPath;
       const isInProgramFiles = terminalPath.includes('Program Files');
-      if (isInProgramFiles) {
-        logger.debug('   → Terminal detectada en Program Files, buscando datos en AppData...');
-        let appDataTerminalPath = null;
-
-        if (process.platform === 'win32' && process.env.APPDATA) {
-          // Windows: usar variable de entorno APPDATA
-          appDataTerminalPath = path.join(process.env.APPDATA, 'MetaQuotes', 'Terminal');
-        } else if (process.platform === 'darwin') {
-          // macOS: derivar AppData desde el Wine prefix que contiene el terminal
-          const driveCMatch = terminalPath.match(/(.*[\/\\]drive_c)/i);
-          if (driveCMatch) {
-            const driveC = driveCMatch[1];
-            const wineUser = PlatformPathManager._getMacWineUsername(driveC);
-            appDataTerminalPath = path.join(driveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal');
-          }
-        }
-
-        if (appDataTerminalPath && fs.existsSync(appDataTerminalPath)) {
+      if (isInProgramFiles && process.platform === 'win32' && process.env.APPDATA) {
+        logger.debug('   → Terminal detectada en Program Files (Windows), buscando datos en AppData...');
+        const appDataTerminalPath = path.join(process.env.APPDATA, 'MetaQuotes', 'Terminal');
+        if (fs.existsSync(appDataTerminalPath)) {
           dataPath = appDataTerminalPath;
           logger.debug(`   → Usando ruta de datos AppData: ${dataPath}`);
         }
@@ -431,7 +418,7 @@ class TerminalScanner {
 
       // Verificar si EA está instalado
       const mqlFolder = type === 'MT4' ? 'MQL4' : 'MQL5';
-      const expertsPath = path.join(terminalPath, mqlFolder, 'Experts');
+      const expertsPath = path.join(dataPath, mqlFolder, 'Experts');
       const eaExtension = type === 'MT4' ? 'ex4' : 'ex5';
       const eaPath = path.join(expertsPath, `DataBridge.${eaExtension}`);
       const installed = fs.existsSync(eaPath);
@@ -455,7 +442,7 @@ class TerminalScanner {
         broker,
         account,
         server,
-        dataPath: terminalPath,
+        dataPath: dataPath,  // ✅ usar dataPath (AppData/hash), no terminalPath (Program Files)
         mqlFolder,
         installed,
         uid: terminalUID
