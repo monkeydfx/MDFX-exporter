@@ -52,15 +52,17 @@ class PlatformPathManager {
       // (el ejecutable, MQL5 y config viven ahí). También incluimos AppData
       // por si hay hash-subfolders (multi-instancia).
       const mt5PrefixDriveC = path.join(supportPath, 'net.metaquotes.wine.metatrader5', 'drive_c');
-      // Program Files: el EA reporta esta ruta como TERMINAL_DATA_PATH
-      paths.push(path.join(mt5PrefixDriveC, 'Program Files', 'MetaTrader 5'));
+      // ⚠️  IMPORTANTE: añadir el PADRE (Program Files) no el terminal mismo.
+      // scanDirectory(Program Files) → detecta 'MetaTrader 5' como subdir → terminal.dataPath = Program Files/MetaTrader 5
+      // Si añadiéramos 'Program Files/MetaTrader 5', el scanner entraría DENTRO y no encontraría nada.
+      paths.push(path.join(mt5PrefixDriveC, 'Program Files'));
       for (const wineUser of [macUsername, 'user']) {
         paths.push(path.join(mt5PrefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
       }
 
       // ─── MT4 Instalador oficial MetaQuotes (Wine, descontinuado) ────────────
       const mt4PrefixDriveC = path.join(supportPath, 'net.metaquotes.wine.metatrader4', 'drive_c');
-      paths.push(path.join(mt4PrefixDriveC, 'Program Files', 'MetaTrader 4'));
+      paths.push(path.join(mt4PrefixDriveC, 'Program Files'));
       for (const wineUser of [macUsername, 'user']) {
         paths.push(path.join(mt4PrefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
       }
@@ -72,9 +74,8 @@ class PlatformPathManager {
           for (const bottle of bottles) {
             if (!bottle.isDirectory()) continue;
             const bottleDriveC = path.join(crossoverBottlesPath, bottle.name, 'drive_c');
-            // Program Files + AppData para CrossOver
-            paths.push(path.join(bottleDriveC, 'Program Files', 'MetaTrader 5'));
-            paths.push(path.join(bottleDriveC, 'Program Files', 'MetaTrader 4'));
+            // Padre Program Files (no el terminal mismo) + AppData para CrossOver
+            paths.push(path.join(bottleDriveC, 'Program Files'));
             for (const wineUser of [macUsername, 'user']) {
               paths.push(path.join(bottleDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
             }
@@ -92,9 +93,8 @@ class PlatformPathManager {
           for (const prefix of prefixes) {
             if (!prefix.isDirectory()) continue;
             const prefixDriveC = path.join(pomPrefixPath, prefix.name, 'drive_c');
-            // Program Files + AppData para PlayOnMac
-            paths.push(path.join(prefixDriveC, 'Program Files', 'MetaTrader 5'));
-            paths.push(path.join(prefixDriveC, 'Program Files', 'MetaTrader 4'));
+            // Padre Program Files (no el terminal mismo) + AppData para PlayOnMac
+            paths.push(path.join(prefixDriveC, 'Program Files'));
             for (const wineUser of [macUsername, 'user']) {
               paths.push(path.join(prefixDriveC, 'users', wineUser, 'AppData', 'Roaming', 'MetaQuotes', 'Terminal'));
             }

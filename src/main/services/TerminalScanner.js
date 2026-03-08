@@ -119,6 +119,9 @@ class TerminalScanner {
               });
             }
           }
+          // ✅ No recursamos dentro de un terminal ya detectado: evita
+          //    que MQL5/Experts u otras subcarpetas se traten como terminales.
+          continue;
         }
 
         // Búsqueda recursiva (máximo 2 niveles)
