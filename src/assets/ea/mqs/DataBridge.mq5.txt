@@ -2,7 +2,7 @@
 //|                                              MT5-Exporter-EA.mq5 |
 //+------------------------------------------------------------------+
 #property copyright "MDFX"
-#property version   "3.11"
+#property version   "3.12"
 #property strict
 
 #include <Trade/Trade.mqh>
@@ -216,10 +216,17 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     }
     FileClose(fileHandle);
     
-    // Si no hay APIKey, la instalación no es válida
+    // Si no hay APIKey, puede ser una instalación nueva (recién creada por la app)
+    // Si además tiene EndpointURL → es fresh install, válida (aún no ha registrado)
+    // Si no tiene EndpointURL → archivo vacío/roto, inválido
     if(StringLen(apiKey) == 0)
     {
-        // Print("   ⚠️ APIKey vacío - instalación no válida");
+        if(StringLen(endpointURL) > 0)
+        {
+            // Print("   ✓ Sin APIKey pero EndpointURL presente → instalación nueva válida (aún no registrada)");
+            return true;
+        }
+        // Print("   ⚠️ APIKey y EndpointURL vacíos - instalación inválida");
         return false;
     }
     
@@ -1378,13 +1385,14 @@ void CleanupObsoleteInstallationFiles()
     // Print("👤 Account: ", accountNum);
     // Print("📄 Config file: ", configFile);
     
-    // Leer APIKey del config actual
+    // Leer APIKey y EndpointURL del config actual
     int configHandle = FileOpen(configFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
     string apiKey = "";
+    string endpointURL = "";
     
     if(configHandle != INVALID_HANDLE)
     {
-        // Print("✓ Config file encontrado - leyendo APIKey...");
+        // Print("✓ Config file encontrado - leyendo APIKey y EndpointURL...");
         
         while(!FileIsEnding(configHandle))
         {
@@ -1393,7 +1401,11 @@ void CleanupObsoleteInstallationFiles()
             {
                 apiKey = StringSubstr(line, 7);
                 StringTrimRight(apiKey);
-                break;
+            }
+            else if(StringFind(line, "EndpointURL=") == 0)
+            {
+                endpointURL = StringSubstr(line, 12);
+                StringTrimRight(endpointURL);
             }
         }
         FileClose(configHandle);
@@ -1404,9 +1416,10 @@ void CleanupObsoleteInstallationFiles()
         return;
     }
     
-    // Si APIKey está vacío, la instalación no es válida
-    // Renombrar archivos a .old para que se recree desde cero
-    if(StringLen(apiKey) == 0)
+    // ⚠️ IMPORTANTE: Solo archivar si APIKey Y EndpointURL están vacíos.
+    // Si hay EndpointURL pero sin APIKey → instalación nueva recién creada por la app,
+    // aún no ha hecho el primer registro. NO archivar o el EA no arrancará nunca.
+    if(StringLen(apiKey) == 0 && StringLen(endpointURL) == 0)
     {
         // Print("⚠️ CLEANUP: APIKey vacío - renombrando archivos a .old");
         

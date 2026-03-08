@@ -2,7 +2,7 @@
 //|                                              MT4-Exporter-EA.mq4 |
 //+------------------------------------------------------------------+
 #property copyright "MDFX"
-#property version   "3.11"
+#property version   "3.12"
 #property strict
 
 // Compatibilidad: OP_BALANCE / OP_CREDIT pueden no estar definidos en algunos builds
