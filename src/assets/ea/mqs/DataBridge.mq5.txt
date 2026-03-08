@@ -425,9 +425,12 @@ bool LoadConfigFromFile()
         int tempHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
         if(tempHandle != INVALID_HANDLE)
         {
+            int linesRead = 0;
             while(!FileIsEnding(tempHandle))
             {
                 string line = FileReadString(tempHandle);
+                linesRead++;
+                Print("   [DBG] Linea ", linesRead, ": '", line, "'");
                 if(StringFind(line, "EndpointURL=") == 0)
                 {
                     tempEndpoint = StringSubstr(line, 12);  // "EndpointURL=".length = 12
@@ -436,6 +439,11 @@ bool LoadConfigFromFile()
                 }
             }
             FileClose(tempHandle);
+            Print("   [DBG] tempEndpoint='", tempEndpoint, "' linesRead=", linesRead);
+        }
+        else
+        {
+            Print("   [DBG] tempHandle FAILED to open: ", filenameWithAccount, " err=", GetLastError());
         }
         
         if(IsInstallationValidInBD(filenameWithAccount, tempEndpoint, filenameOld, stateFileOld))
