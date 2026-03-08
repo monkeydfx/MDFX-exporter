@@ -1369,7 +1369,9 @@ void AutoConfirmInstallation(string email)
 //+------------------------------------------------------------------+
 void CleanupObsoleteInstallationFiles()
 {
-    Print("🔄 ===== INICIANDO CLEANUP DE ARCHIVOS OBSOLETOS =====");
+    Print("🔄 ===== INICIANDO CLEANUP =====");
+    Print("   [PATH] TERMINAL_DATA_PATH: ", TerminalInfoString(TERMINAL_DATA_PATH));
+    Print("   [PATH] TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH));
     
     // Obtener Terminal ID y número de cuenta
     string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
@@ -1401,10 +1403,12 @@ void CleanupObsoleteInstallationFiles()
     if(configHandle != INVALID_HANDLE)
     {
         Print("✓ Config file encontrado - leyendo APIKey y EndpointURL...");
-        
+        int cleanupLines = 0;
         while(!FileIsEnding(configHandle))
         {
             string line = FileReadString(configHandle);
+            cleanupLines++;
+            Print("   [CLEANUP LINE ", cleanupLines, "]: '", line, "'");
             if(StringFind(line, "APIKey=") == 0)
             {
                 apiKey = StringSubstr(line, 7);
@@ -1417,6 +1421,7 @@ void CleanupObsoleteInstallationFiles()
             }
         }
         FileClose(configHandle);
+        Print("   [CLEANUP TOTAL LINES]: ", cleanupLines, " apiKey len=", StringLen(apiKey), " endpointURL len=", StringLen(endpointURL));
     }
     else
     {
