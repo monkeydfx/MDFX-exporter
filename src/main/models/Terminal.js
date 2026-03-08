@@ -38,15 +38,24 @@ class Terminal {
    */
   generateId() {
     // ALGORITMO DEL EA: Últimos 32 caracteres de dataPath en mayúsculas y sanitizados.
-    // En Mac/Wine, TERMINAL_DATA_PATH = "...drive_c/Program Files/MetaTrader 5"
-    // → Los últimos 32 chars contienen "/" y espacios → se reemplazan por "_"
-    // → Coincide exactamente con SanitizeTerminalID() en el EA (DataBridge.mq5)
-    if (this.dataPath && this.dataPath.length >= 32) {
-      const raw = this.dataPath.substring(this.dataPath.length - 32).toUpperCase();
+    // CRÍTICO para Mac/Wine: TERMINAL_DATA_PATH en el EA devuelve la ruta Wine interna
+    // (ej: "c:/Program Files/MetaTrader 5"), NO la ruta completa de macOS.
+    // Node.js ve la ruta macOS completa (".../drive_c/Program Files/MetaTrader 5").
+    // Debemos convertir a la ruta Wine equivalente para que los IDs coincidan.
+    let pathForId = this.dataPath;
+    if (pathForId) {
+      const driveCIndex = pathForId.indexOf('drive_c/');
+      if (driveCIndex !== -1) {
+        // Convertir ruta macOS a ruta Wine: ".../drive_c/X" → "c:/X"
+        pathForId = 'c:/' + pathForId.slice(driveCIndex + 8); // 'drive_c/'.length === 8
+      }
+    }
+    if (pathForId && pathForId.length >= 32) {
+      const raw = pathForId.substring(pathForId.length - 32).toUpperCase();
       return raw.replace(/[^A-Z0-9_]/g, '_');
-    } else if (this.dataPath) {
+    } else if (pathForId) {
       // Si la ruta es menor a 32 caracteres, usar toda en mayúsculas
-      return this.dataPath.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
+      return pathForId.toUpperCase().replace(/[^A-Z0-9_]/g, '_');
     }
 
     // Fallback si no tenemos dataPath
