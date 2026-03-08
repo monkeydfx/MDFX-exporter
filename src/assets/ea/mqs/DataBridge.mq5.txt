@@ -199,7 +199,7 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     if(fileHandle == INVALID_HANDLE)
     {
         int fileErr = GetLastError();
-        // Print("   ⚠️ No se pudo abrir archivo: ", configFilename, " (Error: ", fileErr, ")");
+        Print("   ⚠️ No se pudo abrir archivo: ", configFilename, " (Error: ", fileErr, ")");
         return false;
     }
     
@@ -223,17 +223,17 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     {
         if(StringLen(endpointURL) > 0)
         {
-            // Print("   ✓ Sin APIKey pero EndpointURL presente → instalación nueva válida (aún no registrada)");
+            Print("   ✓ Sin APIKey pero EndpointURL presente - fresh install válida");
             return true;
         }
-        // Print("   ⚠️ APIKey y EndpointURL vacíos - instalación inválida");
+        Print("   ⚠️ APIKey y EndpointURL vacíos - instalación inválida");
         return false;
     }
     
     // 🌐 VALIDAR CONTRA EL SERVIDOR
     if(StringLen(endpointURL) == 0)
     {
-        // Print("   ⚠️ EndpointURL vacío - no se puede validar");
+        Print("   ⚠️ EndpointURL vacío - no se puede validar");
         return false;
     }
     
@@ -245,8 +245,8 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     int timeout = 3000;
     string validateUrl = endpointURL + "/api/validate-installation";
     
-    // Print("   📋 APIKey leído: ", StringSubstr(apiKey, 0, 20), "...");
-    // Print("   🔄 WebRequest GET a: ", validateUrl);
+    Print("   📋 APIKey leído: ", StringSubstr(apiKey, 0, 20), "...");
+    Print("   🔄 WebRequest GET a: ", validateUrl);
     
     int res = WebRequest(
         "GET",
@@ -258,7 +258,7 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
         resultHeaders
     );
     
-    // Print("   📡 Respuesta HTTP: ", res);
+    Print("   📡 Respuesta HTTP: ", res);
     
     if(res == 200)
     {
@@ -372,10 +372,10 @@ bool LoadConfigFromFile()
     string filenameUsed = "";
     bool forceReadConfig = false;
     
-    // Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
-    // Print("   1. ", filenameWithAccount);
-    // Print("   2. ", filenameOld);
-    // Print("   (archivos .old serán ignorados automáticamente)");
+    Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
+    Print("   1. ", filenameWithAccount);
+    Print("   2. ", filenameOld);
+    Print("   (archivos .old serán ignorados automáticamente)");
     
     // ========== PRIMERO: Leer config ANTIGUO (sin account) para obtener EndpointURL y UserEmail ==========
     // Esto es crítico: si el config nuevo no existe pero sí el antiguo,
@@ -418,7 +418,7 @@ bool LoadConfigFromFile()
         FileClose(fileHandle);
         
         // ⚠️ CRÍTICO: Verificar si esta instalación EXISTE en BD
-        // Print("   ⚠️ Archivo con account encontrado - VERIFICANDO en BD...");
+        Print("   ⚠️ Archivo con account encontrado - VERIFICANDO en BD...");
         
         // 🔧 PRIMERO: Leer EndpointURL del archivo para poder validar
         string tempEndpoint = "";
@@ -443,7 +443,7 @@ bool LoadConfigFromFile()
             // ✓ Existe en BD - usar este archivo
             fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
             filenameUsed = filenameWithAccount;
-            // Print("   ✓ ENCONTRADO: #1 (específico de cuenta) - VÁLIDO en BD");
+            Print("   ✓ ENCONTRADO: #1 (específico de cuenta) - VÁLIDO en BD");
         }
         else
         {
@@ -1361,7 +1361,7 @@ void AutoConfirmInstallation(string email)
 //+------------------------------------------------------------------+
 void CleanupObsoleteInstallationFiles()
 {
-    // Print("🔄 ===== INICIANDO CLEANUP DE ARCHIVOS OBSOLETOS =====");
+    Print("🔄 ===== INICIANDO CLEANUP DE ARCHIVOS OBSOLETOS =====");
     
     // Obtener Terminal ID y número de cuenta
     string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
@@ -1381,9 +1381,9 @@ void CleanupObsoleteInstallationFiles()
     string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_config.ini";
     string stateFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_state.txt";
     
-    // Print("📝 Terminal ID: ", terminalID);
-    // Print("👤 Account: ", accountNum);
-    // Print("📄 Config file: ", configFile);
+    Print("📝 Terminal ID: ", terminalID);
+    Print("👤 Account: ", accountNum);
+    Print("📄 Config file: ", configFile);
     
     // Leer APIKey y EndpointURL del config actual
     int configHandle = FileOpen(configFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
@@ -1392,7 +1392,7 @@ void CleanupObsoleteInstallationFiles()
     
     if(configHandle != INVALID_HANDLE)
     {
-        // Print("✓ Config file encontrado - leyendo APIKey y EndpointURL...");
+        Print("✓ Config file encontrado - leyendo APIKey y EndpointURL...");
         
         while(!FileIsEnding(configHandle))
         {
@@ -1412,7 +1412,7 @@ void CleanupObsoleteInstallationFiles()
     }
     else
     {
-        // Print("✗ Config file NO encontrado - nada que limpiar");
+        Print("✗ Config file NO encontrado - nada que limpiar");
         return;
     }
     
@@ -1421,7 +1421,7 @@ void CleanupObsoleteInstallationFiles()
     // aún no ha hecho el primer registro. NO archivar o el EA no arrancará nunca.
     if(StringLen(apiKey) == 0 && StringLen(endpointURL) == 0)
     {
-        // Print("⚠️ CLEANUP: APIKey vacío - renombrando archivos a .old");
+        Print("⚠️ CLEANUP: ambos vacios - renombrando archivos a .old");
         
         // Renombrar config
         if(!FileMove(configFile, FILE_COMMON, configFile + ".old", FILE_COMMON))
@@ -1447,7 +1447,7 @@ void CleanupObsoleteInstallationFiles()
     }
     else
     {
-        // Print("✓ APIKey válida - NO hay limpieza pendiente");
+        Print("✓ CLEANUP OK: EndpointURL=", endpointURL, " APIKey len=", StringLen(apiKey));
     }
     
     // Print("✅ CLEANUP completado");
@@ -2406,13 +2406,13 @@ int OnInit()
     
     if(!LoadConfigFromFile())
     {
-        // Print("❌ Error: No se pudo cargar la configuración");
+        Print("❌ Error: No se pudo cargar la configuración");
         return INIT_FAILED;
     }
     
     if(StringLen(EndpointURL) == 0)
     {
-        // Print("❌ Error: Configuración incompleta (EndpointURL)");
+        Print("❌ Error: Configuración incompleta (EndpointURL)");
         return INIT_FAILED;
     }
 
