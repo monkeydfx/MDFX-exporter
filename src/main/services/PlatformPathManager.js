@@ -234,8 +234,11 @@ class PlatformPathManager {
       const users = fs.readdirSync(usersPath, { withFileTypes: true })
         .filter(e => e.isDirectory() && !systemFolders.has(e.name))
         .map(e => e.name);
-      if (users.includes(macUsername)) return macUsername;
+      // Wine en MetaQuotes siempre usa 'user' como username interno.
+      // El username de macOS puede existir como carpeta stub/symlink pero NO es el real.
+      // Priorizar 'user' → luego macUsername → luego el primero disponible.
       if (users.includes('user')) return 'user';
+      if (users.includes(macUsername)) return macUsername;
       if (users.length > 0) return users[0];
     } catch (_) {
       // sin permisos o directorio vacío
