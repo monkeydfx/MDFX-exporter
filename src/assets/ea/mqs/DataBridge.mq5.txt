@@ -987,7 +987,8 @@ void RegisterInstallation()
     int timeout = 5000;
     string fullUrl = EndpointURL + "/api/activate-installation";
     
-    // 🆕 USAR WEBREQUEST CON RETRY
+    Print("📤 RegisterInstallation → POST ", fullUrl);
+    Print("   JSON: ", json);
     int res = WebRequestWithRetry(
         "POST",
         fullUrl,
@@ -1060,47 +1061,36 @@ void RegisterInstallation()
     }
     else if(res == 404)
     {
-        // Print("🛑 ERROR 404 - INSTALACIÓN NO ENCONTRADA");
-        // Print("   Esto significa que esta terminal NO fue reservada en la app Electron");
-        // Print("   📝 SOLUCIÓN: Abre la app Electron e instala el EA en esta terminal primero");
-        // Print("   Detalles enviados:");
-        // Print("   - Email: ", email);
-        // Print("   - Terminal ID: ", terminalID);
-        // Print("   - Account: ", accountNumber);
+        Print("🛑 ERROR 404 - INSTALACIÓN NO ENCONTRADA");
+        Print("   base_installation_id: ", baseInstallationId);
+        Print("   account_number: ", accountNumber);
+        Print("   email: ", email);
         return;
     }
     else if(res == 403)
     {
-         // Print("🛑 ERROR 403 - TERMINAL RESERVADA POR OTRO USUARIO");
-        // Print("   Esta terminal fue reservada con un email diferente");
-        // Print("   📝 SOLUCIÓN: Usa la app Electron con el email correcto");
-        // Print("   Email actual: ", email);
+        Print("🛑 ERROR 403 - TERMINAL RESERVADA POR OTRO USUARIO email=", email);
         return;
     }
     else if(res == 400)
     {
-         // Print("🛑 ERROR 400 - SOLICITUD INVÁLIDA");
-        // Print("   Faltan campos requeridos o datos mal formados");
-        // Print("   📝 DATOS ENVIADOS:");
-        // Print("   - base_installation_id: ", baseInstallationId);
-        // Print("   - account_number: ", accountNumber);
-        // Print("   - user_id (email): ", email);
-        // Print("   - broker: ", broker);
-        // Print("   - server: ", server);
+        Print("🛑 ERROR 400 - SOLICITUD INVÁLIDA");
+        Print("   base_installation_id: ", baseInstallationId);
+        Print("   account_number: ", accountNumber);
+        Print("   email: ", email);
+        Print("   broker: ", broker);
+        Print("   server: ", server);
+        Print("   raw: ", CharArrayToString(result));
         return;
     }
     else if(res == -1)
     {
-        // Print("❌ ERROR DE CONEXIÓN");
-        // Print("   No se pudo conectar al servidor después de 3 intentos");
-        // Print("   📝 VERIFICAR: ¿Tienes internet? ¿WebRequest habilitado en MT5?");
-        // Print("   URL: ", fullUrl);
+        Print("❌ ERROR DE CONEXIÓN - WebRequest falló. URL: ", fullUrl);
         return;
     }
     else
     {
-        // Print("⚠️ ERROR INESPERADO: ", res);
-        // Print("   Respuesta raw: ", CharArrayToString(result));
+        Print("⚠️ ERROR INESPERADO HTTP=", res, " raw: ", CharArrayToString(result));
         return;
     }
 }
