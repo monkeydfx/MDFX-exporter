@@ -161,10 +161,11 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     }
     FileClose(fileHandle);
     
-    // Si no hay APIKey, la instalación no es válida
+    // Si no hay APIKey, puede ser instalación nueva (fresh install sin primer registro)
     if(StringLen(apiKey) == 0)
     {
-        // Print("   ⚠️ APIKey vacío en archivo - instalación NO VÁLIDA");
+        if(StringLen(endpointURL) > 0)
+            return true; // Fresh install válida: EndpointURL presente, APIKey aún no asignado
         return false;
     }
     
@@ -2993,25 +2994,17 @@ void SendNewTrades()
     
     if(sent == 0)
     {
-        // Aún sin trades nuevos, pero actualizamos el timestamp para evitar revisar los mismos trades
-        // 🔧 IMPORTANTE: Asegurar que NUNCA quedamos con timestamp futuro
-        datetime targetTime = TimeCurrent();
-        if(g_lastProcessedTime > targetTime)
-        {
-            // Print("⚠️ FIX: g_lastProcessedTime era futuro, reseteando a ahora");
-            g_lastProcessedTime = targetTime;
-        }
+        // 🔧 FIX CRÍTICO: Usar 'to' (tiempo de inicio de HistorySelect) en vez de TimeCurrent()
+        // TimeCurrent() se evalúa DESPUÉS del WebRequest y puede estar varios segundos adelante.
+        // Cualquier trade cerrado DURANTE el WebRequest quedaría entre 'to' y TimeCurrent(),
+        // lo que haría que el próximo HistorySelect lo saltara permanentemente.
+        if(g_lastProcessedTime > TimeCurrent())
+            g_lastProcessedTime = TimeCurrent();  // Reset si está en el futuro
         
-        // Solo si hemos avanzado en el tiempo
-        if(targetTime > g_lastProcessedTime)
+        if(to > g_lastProcessedTime)
         {
-            // Print("🔍 DEBUG SIN TRADES NUEVOS:");
-            // Print("   targetTime: ", TimeToString(targetTime));
-            // Print("   g_lastProcessedTime anterior: ", TimeToString(g_lastProcessedTime));
-            g_lastProcessedTime = targetTime;
+            g_lastProcessedTime = to;
             SaveState();
-            // Print("   g_lastProcessedTime nuevo: ", TimeToString(g_lastProcessedTime));
-            // Print("✓ Sin trades nuevos, pero actualizado timestamp a: ", TimeToString(g_lastProcessedTime));
         }
         return;
     }
@@ -3033,6 +3026,7 @@ void SendNewTrades()
     bool sendOk = SendToEndpoint(json, "/api/mt-sync");
     if(sendOk)
     {
+        Print("✅ ", sent, " trade(s) sincronizados correctamente");
         if(newestTime > TimeCurrent())
             g_lastProcessedTime = TimeCurrent();
         else
@@ -3187,7 +3181,12 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
     }
     else if(res == 403)
     {
-        Print("⚠️ Instalación pendiente de confirmación");
+        Print("⚠️ 403: Instalación no confirmada - forzando re-verificación");
+        g_isAccountConfirmed = false;  // Fuerza re-comprobación en 30s
+    }
+    else
+    {
+        Print("⚠️ HTTP ", res, " en endpoint - trade no enviado");
     }
     return false;
 }

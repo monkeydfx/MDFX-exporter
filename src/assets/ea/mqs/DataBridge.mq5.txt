@@ -199,7 +199,7 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     if(fileHandle == INVALID_HANDLE)
     {
         int fileErr = GetLastError();
-        Print("   ⚠️ No se pudo abrir archivo: ", configFilename, " (Error: ", fileErr, ")");
+        // Print("   ⚠️ No se pudo abrir archivo: ", configFilename, " (Error: ", fileErr, ")");
         return false;
     }
     
@@ -223,17 +223,17 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     {
         if(StringLen(endpointURL) > 0)
         {
-            Print("   ✓ Sin APIKey pero EndpointURL presente - fresh install válida");
+            // Print("   ✓ Sin APIKey pero EndpointURL presente - fresh install válida");
             return true;
         }
-        Print("   ⚠️ APIKey y EndpointURL vacíos - instalación inválida");
+        // Print("   ⚠️ APIKey y EndpointURL vacíos - instalación inválida");
         return false;
     }
     
     // 🌐 VALIDAR CONTRA EL SERVIDOR
     if(StringLen(endpointURL) == 0)
     {
-        Print("   ⚠️ EndpointURL vacío - no se puede validar");
+        // Print("   ⚠️ EndpointURL vacío - no se puede validar");
         return false;
     }
     
@@ -245,8 +245,8 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
     int timeout = 3000;
     string validateUrl = endpointURL + "/api/validate-installation";
     
-    Print("   📋 APIKey leído: ", StringSubstr(apiKey, 0, 20), "...");
-    Print("   🔄 WebRequest GET a: ", validateUrl);
+    // Print("   📋 APIKey leído: ", StringSubstr(apiKey, 0, 20), "...");
+    // Print("   🔄 WebRequest GET a: ", validateUrl);
     
     int res = WebRequest(
         "GET",
@@ -258,7 +258,7 @@ bool IsInstallationValidInBD(string configFilename, string endpointURL,
         resultHeaders
     );
     
-    Print("   📡 Respuesta HTTP: ", res);
+    // Print("   📡 Respuesta HTTP: ", res);
     
     if(res == 200)
     {
@@ -372,9 +372,9 @@ bool LoadConfigFromFile()
     string filenameUsed = "";
     bool forceReadConfig = false;
     
-    Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
-    Print("   1. ", filenameWithAccount);
-    Print("   2. ", filenameOld);
+    // Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
+    // Print("   1. ", filenameWithAccount);
+    // Print("   2. ", filenameOld);
     Print("   (archivos .old serán ignorados automáticamente)");
     
     // ========== PRIMERO: Leer config ANTIGUO (sin account) para obtener EndpointURL y UserEmail ==========
@@ -418,19 +418,16 @@ bool LoadConfigFromFile()
         FileClose(fileHandle);
         
         // ⚠️ CRÍTICO: Verificar si esta instalación EXISTE en BD
-        Print("   ⚠️ Archivo con account encontrado - VERIFICANDO en BD...");
+        // Print("   ⚠️ Archivo con account encontrado - VERIFICANDO en BD...");
         
         // 🔧 PRIMERO: Leer EndpointURL del archivo para poder validar
         string tempEndpoint = "";
         int tempHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
         if(tempHandle != INVALID_HANDLE)
         {
-            int linesRead = 0;
             while(!FileIsEnding(tempHandle))
             {
                 string line = FileReadString(tempHandle);
-                linesRead++;
-                Print("   [DBG] Linea ", linesRead, ": '", line, "'");
                 if(StringFind(line, "EndpointURL=") == 0)
                 {
                     tempEndpoint = StringSubstr(line, 12);  // "EndpointURL=".length = 12
@@ -439,11 +436,6 @@ bool LoadConfigFromFile()
                 }
             }
             FileClose(tempHandle);
-            Print("   [DBG] tempEndpoint='", tempEndpoint, "' linesRead=", linesRead);
-        }
-        else
-        {
-            Print("   [DBG] tempHandle FAILED to open: ", filenameWithAccount, " err=", GetLastError());
         }
         
         if(IsInstallationValidInBD(filenameWithAccount, tempEndpoint, filenameOld, stateFileOld))
@@ -451,7 +443,7 @@ bool LoadConfigFromFile()
             // ✓ Existe en BD - usar este archivo
             fileHandle = FileOpen(filenameWithAccount, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
             filenameUsed = filenameWithAccount;
-            Print("   ✓ ENCONTRADO: #1 (específico de cuenta) - VÁLIDO en BD");
+            // Print("   ✓ ENCONTRADO: #1 (específico de cuenta) - VÁLIDO en BD");
         }
         else
         {
@@ -987,8 +979,8 @@ void RegisterInstallation()
     int timeout = 5000;
     string fullUrl = EndpointURL + "/api/activate-installation";
     
-    Print("📤 RegisterInstallation → POST ", fullUrl);
-    Print("   JSON: ", json);
+    // Print("📤 RegisterInstallation → POST ", fullUrl);
+    // Print("   JSON: ", json);
     int res = WebRequestWithRetry(
         "POST",
         fullUrl,
@@ -1006,7 +998,7 @@ void RegisterInstallation()
             
             // 🆕 Parsear respuesta para obtener apiKey y confirmed status
             string resultStr = CharArrayToString(result);
-            Print("Respuesta JSON: ", resultStr);
+            // Print("Respuesta JSON: ", resultStr);
         int apiKeyPos = StringFind(resultStr, "\"api_key\":\"");
         if(apiKeyPos > 0)
         {
@@ -1061,36 +1053,27 @@ void RegisterInstallation()
     }
     else if(res == 404)
     {
-        Print("🛑 ERROR 404 - INSTALACIÓN NO ENCONTRADA");
-        Print("   base_installation_id: ", baseInstallationId);
-        Print("   account_number: ", accountNumber);
-        Print("   email: ", email);
+        // Print("🛑 ERROR 404 - INSTALACIÓN NO ENCONTRADA");
         return;
     }
     else if(res == 403)
     {
-        Print("🛑 ERROR 403 - TERMINAL RESERVADA POR OTRO USUARIO email=", email);
+        // Print("🛑 ERROR 403 - TERMINAL RESERVADA POR OTRO USUARIO");
         return;
     }
     else if(res == 400)
     {
-        Print("🛑 ERROR 400 - SOLICITUD INVÁLIDA");
-        Print("   base_installation_id: ", baseInstallationId);
-        Print("   account_number: ", accountNumber);
-        Print("   email: ", email);
-        Print("   broker: ", broker);
-        Print("   server: ", server);
-        Print("   raw: ", CharArrayToString(result));
+        // Print("🛑 ERROR 400 - SOLICITUD INVÁLIDA");
         return;
     }
     else if(res == -1)
     {
-        Print("❌ ERROR DE CONEXIÓN - WebRequest falló. URL: ", fullUrl);
+        // Print("❌ ERROR DE CONEXIÓN - WebRequest falló");
         return;
     }
     else
     {
-        Print("⚠️ ERROR INESPERADO HTTP=", res, " raw: ", CharArrayToString(result));
+        // Print("⚠️ ERROR INESPERADO HTTP=", res);
         return;
     }
 }
@@ -1359,9 +1342,7 @@ void AutoConfirmInstallation(string email)
 //+------------------------------------------------------------------+
 void CleanupObsoleteInstallationFiles()
 {
-    Print("🔄 ===== INICIANDO CLEANUP =====");
-    Print("   [PATH] TERMINAL_DATA_PATH: ", TerminalInfoString(TERMINAL_DATA_PATH));
-    Print("   [PATH] TERMINAL_COMMONDATA_PATH: ", TerminalInfoString(TERMINAL_COMMONDATA_PATH));
+    // Print("🔄 ===== INICIANDO CLEANUP =====");
     
     // Obtener Terminal ID y número de cuenta
     string terminalPath = TerminalInfoString(TERMINAL_DATA_PATH);
@@ -1392,13 +1373,9 @@ void CleanupObsoleteInstallationFiles()
     
     if(configHandle != INVALID_HANDLE)
     {
-        Print("✓ Config file encontrado - leyendo APIKey y EndpointURL...");
-        int cleanupLines = 0;
         while(!FileIsEnding(configHandle))
         {
             string line = FileReadString(configHandle);
-            cleanupLines++;
-            Print("   [CLEANUP LINE ", cleanupLines, "]: '", line, "'");
             if(StringFind(line, "APIKey=") == 0)
             {
                 apiKey = StringSubstr(line, 7);
@@ -1411,11 +1388,10 @@ void CleanupObsoleteInstallationFiles()
             }
         }
         FileClose(configHandle);
-        Print("   [CLEANUP TOTAL LINES]: ", cleanupLines, " apiKey len=", StringLen(apiKey), " endpointURL len=", StringLen(endpointURL));
     }
     else
     {
-        Print("✗ Config file NO encontrado - nada que limpiar");
+        // Print("✗ Config file NO encontrado - nada que limpiar");
         return;
     }
     
@@ -1424,7 +1400,7 @@ void CleanupObsoleteInstallationFiles()
     // aún no ha hecho el primer registro. NO archivar o el EA no arrancará nunca.
     if(StringLen(apiKey) == 0 && StringLen(endpointURL) == 0)
     {
-        Print("⚠️ CLEANUP: ambos vacios - renombrando archivos a .old");
+        // Print("⚠️ CLEANUP: ambos vacios - renombrando archivos a .old");
         
         // Renombrar config
         if(!FileMove(configFile, FILE_COMMON, configFile + ".old", FILE_COMMON))
@@ -1450,7 +1426,7 @@ void CleanupObsoleteInstallationFiles()
     }
     else
     {
-        Print("✓ CLEANUP OK: EndpointURL=", endpointURL, " APIKey len=", StringLen(apiKey));
+        // Print("✓ CLEANUP OK: EndpointURL=", endpointURL, " APIKey len=", StringLen(apiKey));
     }
     
     // Print("✅ CLEANUP completado");
@@ -2409,13 +2385,13 @@ int OnInit()
     
     if(!LoadConfigFromFile())
     {
-        Print("❌ Error: No se pudo cargar la configuración");
+        // Print("❌ Error: No se pudo cargar la configuración");
         return INIT_FAILED;
     }
     
     if(StringLen(EndpointURL) == 0)
     {
-        Print("❌ Error: Configuración incompleta (EndpointURL)");
+        // Print("❌ Error: Configuración incompleta (EndpointURL)");
         return INIT_FAILED;
     }
 
@@ -3083,21 +3059,17 @@ void SendNewTrades()
     
     if(sent == 0)
     {
-        // Aún sin trades nuevos, pero actualizamos el timestamp para evitar revisar los mismos trades
-        // 🔧 IMPORTANTE: Asegurar que NUNCA quedamos con timestamp futuro
-        datetime targetTime = TimeCurrent();
-        if(g_lastProcessedTime > targetTime)
-        {
-            // Print("⚠️ FIX: g_lastProcessedTime era futuro, reseteando a ahora");
-            g_lastProcessedTime = targetTime;
-        }
+        // 🔧 FIX CRÍTICO: Usar 'to' (tiempo de inicio de HistorySelect) en vez de TimeCurrent()
+        // TimeCurrent() se evalúa DESPUÉS del WebRequest y puede estar varios segundos adelante.
+        // Cualquier trade cerrado DURANTE el WebRequest quedaría entre 'to' y TimeCurrent(),
+        // lo que haría que el próximo HistorySelect lo saltara permanentemente.
+        if(g_lastProcessedTime > TimeCurrent())
+            g_lastProcessedTime = TimeCurrent();  // Reset si está en el futuro
         
-        // Solo si hemos avanzado en el tiempo
-        if(targetTime > g_lastProcessedTime)
+        if(to > g_lastProcessedTime)
         {
-            g_lastProcessedTime = targetTime;
+            g_lastProcessedTime = to;
             SaveState();
-            // Print("✓ Sin trades nuevos, pero actualizado timestamp a: ", TimeToString(g_lastProcessedTime));
         }
         return;
     }
@@ -3119,6 +3091,7 @@ void SendNewTrades()
     bool sendOk = SendToEndpoint(json, "/api/mt-sync");
     if(sendOk)
     {
+        Print("✅ ", sent, " trade(s) sincronizados correctamente");
         if(newestTime > TimeCurrent())
             g_lastProcessedTime = TimeCurrent();
         else
@@ -3284,7 +3257,12 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
     }
     else if(res == 403)
     {
-        Print("⚠️ Instalación pendiente de confirmación");
+        Print("⚠️ 403: Instalación no confirmada - forzando re-verificación");
+        g_isAccountConfirmed = false;  // Fuerza re-comprobación en 30s
+    }
+    else
+    {
+        Print("⚠️ HTTP ", res, " en ", endpoint, " - trade no enviado");
     }
     return false;
 }
