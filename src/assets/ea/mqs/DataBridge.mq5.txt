@@ -375,7 +375,6 @@ bool LoadConfigFromFile()
     // Print("🔍 BÚSQUEDA DE CONFIG (Orden de preferencia):");
     // Print("   1. ", filenameWithAccount);
     // Print("   2. ", filenameOld);
-    Print("   (archivos .old serán ignorados automáticamente)");
     
     // ========== PRIMERO: Leer config ANTIGUO (sin account) para obtener EndpointURL y UserEmail ==========
     // Esto es crítico: si el config nuevo no existe pero sí el antiguo,
@@ -877,7 +876,8 @@ int WebRequestWithRetry(
         // Print("   ❌ Error ", result);
         
         // No reintentar si es error 4xx (excepto 408, 409, 429)
-        // 409 = Conflict (file locking) - SÍ reintentar
+        // 409 = conflicto de negocio - reintentar por si acaso
+        // 503 = lock activo - se reintenta (5xx no tiene guard, cae al loop)
         if(result >= 400 && result < 500)
         {
             if(result != 408 && result != 409 && result != 429)
@@ -994,7 +994,6 @@ void RegisterInstallation()
     
     if(res == 200 || res == 201)
     {
-            Print("✅ INSTALACIÓN ACTIVADA EXITOSAMENTE");
             
             // 🆕 Parsear respuesta para obtener apiKey y confirmed status
             string resultStr = CharArrayToString(result);
@@ -1036,12 +1035,10 @@ void RegisterInstallation()
             string confirmedPart = StringSubstr(resultStr, confirmedPos + 12, 1);
             if(confirmedPart == "1")
             {
-                Print("✅ Instalación YA confirmada - puede sincronizar trades");
                 g_isAccountConfirmed = true;
             }
             else
             {
-                Print("⏳ Instalación PENDIENTE DE CONFIRMACIÓN - espere confirmación desde el journal");
                 g_isAccountConfirmed = false;
             }
         }
@@ -1362,9 +1359,7 @@ void CleanupObsoleteInstallationFiles()
     string configFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_config.ini";
     string stateFile = "DataBridge_MT5_" + terminalID + "_" + accountNum + "_state.txt";
     
-    Print("📝 Terminal ID: ", terminalID);
-    Print("👤 Account: ", accountNum);
-    Print("📄 Config file: ", configFile);
+
     
     // Leer APIKey y EndpointURL del config actual
     int configHandle = FileOpen(configFile, FILE_READ|FILE_TXT|FILE_COMMON|FILE_ANSI);
@@ -2213,7 +2208,6 @@ void EnsureChartCommentsVisible()
 void NotifyAlert(string message)
 {
     Alert(message);
-    Print(message);
     PlaySound("alert.wav");
 }
 
@@ -2613,7 +2607,6 @@ void OnTimer()
         {
             if(g_isAccountConfirmed)
             {
-                Print("📤 Sincronizando trades cerrados...");
                 SendNewTrades();
                 SendCashflows();
                 // 🔧 CRÍTICO: Solo marcar como procesado si el envío pudo ejecutarse
@@ -2623,7 +2616,6 @@ void OnTimer()
             }
             else
             {
-                Print("⚠️ NO CONFIRMADO - Enviando datos de cuenta...");
                 SendAccountData();
                 g_lastClosedDealTime = newestDealTime;
             }
@@ -3091,7 +3083,6 @@ void SendNewTrades()
     bool sendOk = SendToEndpoint(json, "/api/mt-sync");
     if(sendOk)
     {
-        Print("✅ ", sent, " trade(s) sincronizados correctamente");
         if(newestTime > TimeCurrent())
             g_lastProcessedTime = TimeCurrent();
         else
@@ -3185,9 +3176,6 @@ void CheckIfServerNeedsSyncFromBrowser()
         // Parse respuesta: {"sync_needed": true/false, ...}
         if(StringFind(responseText, "\"sync_needed\":true") != -1)
         {
-            // El servidor indica que los trades desincronizados
-            // Forzar resincronización desde MT5
-            Print("🔄 SERVIDOR SOLICITA RESYNC - Enviando trades...");
             SendNewTrades();
             SendCashflows();
         }
@@ -3243,13 +3231,11 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
             {
                 if(!g_isAccountConfirmed)
                 {
-                    Print("✅✅ CUENTA CONFIRMADA! Ya se puede sincronizar");
                     g_isAccountConfirmed = true;
                 }
             }
             else if(StringFind(responseText, "\"confirmed\":0") != -1)
             {
-                Print("⏳ Cuenta pendiente de confirmación desde el journal");
                 g_isAccountConfirmed = false;
             }
         }
@@ -3257,23 +3243,15 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
     }
     else if(res == 409)
     {
-        // 409 = ya existe en BD (idempotente) → tratar como éxito para avanzar el cursor
-        Print("ℹ️ HTTP 409 en ", endpoint, " - dato ya existente en BD, avanzando cursor");
-        return true;
+        return false;
+    }
+    else if(res == 503)
+    {
+        return false;
     }
     else if(res == 403)
     {
-        Print("⚠️ 403: Instalación no confirmada - forzando re-verificación");
-        g_isAccountConfirmed = false;  // Fuerza re-comprobación en 30s
-    }
-    else if(res == 500)
-    {
-        string errBody = CharArrayToString(result);
-        Print("❌ HTTP 500 en ", endpoint, " → ", StringSubstr(errBody, 0, 200));
-    }
-    else
-    {
-        Print("⚠️ HTTP ", res, " en ", endpoint, " - trade no enviado");
+        g_isAccountConfirmed = false;
     }
     return false;
 }
