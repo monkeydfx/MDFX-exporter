@@ -2416,29 +2416,29 @@ void SendHeartbeat()
         return;
     }
     
-    // Construir JSON para heartbeat
+    // Construir JSON para heartbeat (alineado con MQL5)
     string jsonData = "{";
-    jsonData += "\"timestamp\":\"" + TimeToString(now, TIME_DATE | TIME_MINUTES | TIME_SECONDS) + "\",";
+    jsonData += "\"type\":\"heartbeat\",";
+    jsonData += "\"timestamp\":" + IntegerToString(now) + ",";
     jsonData += "\"account\":" + IntegerToString(AccountNumber()) + ",";
-    jsonData += "\"balance\":\"" + DoubleToString(AccountBalance(), 2) + "\",";
-    jsonData += "\"equity\":\"" + DoubleToString(AccountEquity(), 2) + "\"";
+    jsonData += "\"installation_id\":\"" + BuildInstallationId() + "\",";
+    jsonData += "\"terminal_id\":\"" + g_terminalID + "\",";
+    jsonData += "\"status\":\"online\",";
+    jsonData += "\"balance\":" + DoubleToString(AccountBalance(), 2) + ",";
+    jsonData += "\"equity\":" + DoubleToString(AccountEquity(), 2);
     jsonData += "}";
     
     // Enviar heartbeat al servidor
-    string headers = "Content-Type: application/json\r\nX-API-Key: " + APIKey;
+    string headers = "Content-Type: application/json\r\n";
+    headers += "X-API-Key: " + APIKey + "\r\n";
     int timeout = 3000;  // 3 segundos timeout
     
     char dataArray[];
     char resultArray[];
     string response = "";
     
-    // Convert jsonData string to char array  
-    int jsonLen = StringLen(jsonData);
-    ArrayResize(dataArray, (uint)jsonLen);  // Explicit cast to uint
-    for(int i = 0; i < jsonLen; i++)
-    {
-        dataArray[i] = (char)StringGetChar(jsonData, i);  // Explicit cast
-    }
+    StringToCharArray(jsonData, dataArray, 0, WHOLE_ARRAY, CP_UTF8);
+    ArrayResize(dataArray, ArraySize(dataArray) - 1);
     
     int statusCode = WebRequest(
         EndpointURL + "/api/mt-heartbeat",
@@ -3179,10 +3179,21 @@ bool SendToEndpoint(string jsonData, string endpoint, bool parseAccountStatus = 
         }
         return true;
     }
+    else if(res == 409)
+    {
+        // 409 = ya existe en BD (idempotente) → tratar como éxito para avanzar el cursor
+        Print("ℹ️ HTTP 409 en ", endpoint, " - dato ya existente en BD, avanzando cursor");
+        return true;
+    }
     else if(res == 403)
     {
         Print("⚠️ 403: Instalación no confirmada - forzando re-verificación");
         g_isAccountConfirmed = false;  // Fuerza re-comprobación en 30s
+    }
+    else if(res == 500)
+    {
+        string errBody = CharArrayToString(result);
+        Print("❌ HTTP 500 en ", endpoint, " → ", StringSubstr(errBody, 0, 200));
     }
     else
     {
